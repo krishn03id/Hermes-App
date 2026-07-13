@@ -19,13 +19,17 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.DrawerValue
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
@@ -37,8 +41,6 @@ import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextField
-import androidx.compose.material3.TextFieldDefaults
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.material3.rememberDrawerState
@@ -51,6 +53,9 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
@@ -58,6 +63,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import id.krishn03.hermes.R
 import id.krishn03.hermes.data.Role
 import id.krishn03.hermes.ui.theme.HermesPurple
 import kotlinx.coroutines.launch
@@ -137,12 +143,20 @@ fun HermesApp(viewModel: ChatViewModel) {
                     },
                     navigationIcon = {
                         IconButton(onClick = { scope.launch { drawerState.open() } }) {
-                            Icon(Icons.Filled.Menu, contentDescription = "Menu")
+                            Icon(
+                                Icons.Filled.Menu,
+                                contentDescription = "Menu",
+                                tint = MaterialTheme.colorScheme.onBackground,
+                            )
                         }
                     },
                     actions = {
                         IconButton(onClick = { viewModel.newChat() }) {
-                            Icon(Icons.Filled.Add, contentDescription = "New chat")
+                            Icon(
+                                painter = painterResource(R.drawable.ic_ghost),
+                                contentDescription = "New temporary chat",
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
                         }
                     },
                     colors = TopAppBarDefaults.topAppBarColors(
@@ -169,6 +183,10 @@ fun HermesApp(viewModel: ChatViewModel) {
                 }
                 InputBar(
                     isStreaming = state.isStreaming,
+                    keys = state.keys,
+                    activeKey = state.activeKey,
+                    onSelectKey = viewModel::updateActiveKey,
+                    onNewChat = viewModel::newChat,
                     onSend = viewModel::send,
                     onStop = viewModel::stopStreaming,
                 )
@@ -179,21 +197,24 @@ fun HermesApp(viewModel: ChatViewModel) {
 
 @Composable
 private fun EmptyState(hasKey: Boolean) {
+    // Greeting sits in the upper-middle, not dead center (~32% down).
     Column(
         modifier = Modifier.fillMaxSize().padding(32.dp),
-        verticalArrangement = Arrangement.Center,
+        verticalArrangement = Arrangement.Top,
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
+        Spacer(Modifier.weight(0.32f))
         Text(
             text = "✳",
-            style = MaterialTheme.typography.headlineMedium,
+            fontSize = 40.sp,
             color = MaterialTheme.colorScheme.primary,
         )
-        Spacer(Modifier.height(12.dp))
+        Spacer(Modifier.height(16.dp))
         Text(
-            text = if (hasKey) "How can I help you today?" else "Welcome to Hermes",
-            style = MaterialTheme.typography.headlineSmall,
+            text = if (hasKey) "Hey there" else "Welcome to Hermes",
             fontFamily = FontFamily.Serif,
+            fontSize = 30.sp,
+            fontWeight = FontWeight.Medium,
             color = MaterialTheme.colorScheme.onBackground,
             textAlign = TextAlign.Center,
         )
@@ -206,6 +227,7 @@ private fun EmptyState(hasKey: Boolean) {
                 textAlign = TextAlign.Center,
             )
         }
+        Spacer(Modifier.weight(0.68f))
     }
 }
 
@@ -276,79 +298,168 @@ private fun ThinkingIndicator() {
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun InputBar(isStreaming: Boolean, onSend: (String) -> Unit, onStop: () -> Unit) {
+private fun InputBar(
+    isStreaming: Boolean,
+    keys: List<id.krishn03.hermes.data.ApiKeyEntry>,
+    activeKey: id.krishn03.hermes.data.ApiKeyEntry?,
+    onSelectKey: (String) -> Unit,
+    onNewChat: () -> Unit,
+    onSend: (String) -> Unit,
+    onStop: () -> Unit,
+) {
     var text by remember { mutableStateOf("") }
+    val canSend = text.isNotBlank()
+
     Surface(color = MaterialTheme.colorScheme.background) {
-        Row(
+        // Floating rounded input container.
+        Surface(
+            shape = RoundedCornerShape(28.dp),
+            color = MaterialTheme.colorScheme.surfaceContainer,
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(horizontal = 12.dp, vertical = 8.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            // Left action — mirrors the send button on the right for symmetry.
-            RoundIconButton(
-                icon = Icons.Filled.Add,
-                contentDescription = "New chat",
-                container = MaterialTheme.colorScheme.surfaceVariant,
-                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                onClick = { text = "" },
-            )
-            TextField(
-                value = text,
-                onValueChange = { text = it },
-                modifier = Modifier.weight(1f),
-                placeholder = { Text("Message Hermes…") },
-                shape = RoundedCornerShape(24.dp),
-                maxLines = 6,
-                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Default),
-                colors = TextFieldDefaults.colors(
-                    focusedContainerColor = MaterialTheme.colorScheme.surfaceContainer,
-                    unfocusedContainerColor = MaterialTheme.colorScheme.surfaceContainer,
-                    focusedIndicatorColor = androidx.compose.ui.graphics.Color.Transparent,
-                    unfocusedIndicatorColor = androidx.compose.ui.graphics.Color.Transparent,
-                    disabledIndicatorColor = androidx.compose.ui.graphics.Color.Transparent,
-                ),
-            )
-            val canSend = text.isNotBlank()
-            RoundIconButton(
-                icon = if (isStreaming) Icons.Filled.Stop else Icons.AutoMirrored.Filled.Send,
-                contentDescription = if (isStreaming) "Stop" else "Send",
-                container = if (isStreaming || canSend) MaterialTheme.colorScheme.primary
-                else MaterialTheme.colorScheme.surfaceVariant,
-                tint = if (isStreaming || canSend) MaterialTheme.colorScheme.onPrimary
-                else MaterialTheme.colorScheme.onSurfaceVariant,
-                enabled = isStreaming || canSend,
-                onClick = {
-                    if (isStreaming) {
-                        onStop()
-                    } else if (canSend) {
-                        onSend(text)
-                        text = ""
+            Column(Modifier.padding(horizontal = 16.dp, vertical = 12.dp)) {
+                // Text field — transparent, sits inside the container.
+                Box(Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
+                    if (text.isEmpty()) {
+                        Text(
+                            text = "Chat with Hermes…",
+                            style = MaterialTheme.typography.bodyLarge,
+                            color = Color(0xFF8C8A86),
+                        )
                     }
-                },
-            )
+                    BasicTextField(
+                        value = text,
+                        onValueChange = { text = it },
+                        textStyle = MaterialTheme.typography.bodyLarge.copy(
+                            color = MaterialTheme.colorScheme.onSurface,
+                        ),
+                        cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
+                        maxLines = 6,
+                        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Default),
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                }
+                Spacer(Modifier.height(10.dp))
+                // Action row: [+]  [Model ▾]        [send]
+                Row(
+                    Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    // "+" — dark circular button.
+                    Surface(
+                        shape = CircleShape,
+                        color = MaterialTheme.colorScheme.surfaceVariant,
+                        modifier = Modifier.size(40.dp),
+                    ) {
+                        IconButton(onClick = onNewChat) {
+                            Icon(
+                                Icons.Filled.Add,
+                                contentDescription = "New chat",
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                    }
+                    Spacer(Modifier.width(10.dp))
+                    ModelPill(
+                        keys = keys,
+                        activeKey = activeKey,
+                        onSelectKey = onSelectKey,
+                    )
+                    Spacer(Modifier.weight(1f))
+                    // Send / stop — solid off-white circle with a dark glyph.
+                    val active = isStreaming || canSend
+                    Surface(
+                        shape = CircleShape,
+                        color = if (active) MaterialTheme.colorScheme.onBackground
+                        else MaterialTheme.colorScheme.surfaceVariant,
+                        modifier = Modifier.size(44.dp),
+                    ) {
+                        IconButton(
+                            enabled = active,
+                            onClick = {
+                                if (isStreaming) onStop()
+                                else if (canSend) {
+                                    onSend(text)
+                                    text = ""
+                                }
+                            },
+                        ) {
+                            Icon(
+                                imageVector = if (isStreaming) Icons.Filled.Stop
+                                else Icons.AutoMirrored.Filled.Send,
+                                contentDescription = if (isStreaming) "Stop" else "Send",
+                                tint = if (active) MaterialTheme.colorScheme.background
+                                else MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                    }
+                }
+            }
         }
     }
 }
 
-/** A fixed-size circular icon button so both ends of the input bar match. */
+/** Rounded pill that shows the active model and opens a picker of all keys. */
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun RoundIconButton(
-    icon: androidx.compose.ui.graphics.vector.ImageVector,
-    contentDescription: String,
-    container: androidx.compose.ui.graphics.Color,
-    tint: androidx.compose.ui.graphics.Color,
-    enabled: Boolean = true,
-    onClick: () -> Unit,
+private fun ModelPill(
+    keys: List<id.krishn03.hermes.data.ApiKeyEntry>,
+    activeKey: id.krishn03.hermes.data.ApiKeyEntry?,
+    onSelectKey: (String) -> Unit,
 ) {
-    Surface(
-        shape = CircleShape,
-        color = container,
-        modifier = Modifier.size(44.dp),
-    ) {
-        IconButton(onClick = onClick, enabled = enabled) {
-            Icon(imageVector = icon, contentDescription = contentDescription, tint = tint)
+    var expanded by remember { mutableStateOf(false) }
+    Box {
+        Surface(
+            shape = RoundedCornerShape(20.dp),
+            color = MaterialTheme.colorScheme.surfaceContainerHigh,
+            onClick = { if (keys.isNotEmpty()) expanded = true },
+        ) {
+            Row(
+                Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    text = activeKey?.model ?: "No model",
+                    style = MaterialTheme.typography.bodyMedium,
+                    fontWeight = FontWeight.SemiBold,
+                    color = MaterialTheme.colorScheme.onSurface,
+                )
+                activeKey?.let {
+                    Spacer(Modifier.width(6.dp))
+                    Text(
+                        text = it.provider.label,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                Icon(
+                    Icons.Filled.ArrowDropDown,
+                    contentDescription = "Choose model",
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+        DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+            keys.forEach { key ->
+                DropdownMenuItem(
+                    text = {
+                        Column {
+                            Text(key.label.ifBlank { key.model }, fontWeight = FontWeight.Medium)
+                            Text(
+                                "${key.provider.label} · ${key.model}",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                    },
+                    onClick = {
+                        onSelectKey(key.id)
+                        expanded = false
+                    },
+                )
+            }
         }
     }
 }
