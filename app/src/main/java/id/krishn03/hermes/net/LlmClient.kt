@@ -82,8 +82,44 @@ object LlmClient {
         }
     }
 
-    // ---- OpenAI (and OpenAI-compatible endpoints) ----
+    // ---- Model discovery ----
 
+    /** Fetches the provider's available model ids so users can pick instead of
+     *  typing. Returns them sorted; throws with a readable message on failure. */
+    suspend fun listModels(key: ApiKeyEntry): List<String> = withContext(Dispatchers.IO) {
+        val base = key.baseUrl.trimEnd('/')
+        val builder = when (key.provider) {
+            Provider.OPENAI -> Request.Builder()
+                .url("$base/models")
+                .header("Authorization", "Bearer ${key.key}")
+            Provider.ANTHROPIC -> Request.Builder()
+                .url("$base/models?limit=1000")
+                .header("x-api-key", key.key)
+                .header("anthropic-version", "2023-06-01")
+            Provider.GEMINI -> Request.Builder()
+                .url("$base/models?pageSize=1000&key=${key.key}")
+        }
+        val request = builder.get().applyCustomHeaders(key).build()
+        http.newCall(request).execute().use { response ->
+            val text = response.body?.string().orEmpty()
+            if (!response.isSuccessful) {
+                throw RuntimeException("${key.provider.label} error ${response.code}: ${text.take(300)}")
+            }
+            val root = json.parseToJsonElement(text).jsonObject
+            val ids = when (key.provider) {
+                Provider.GEMINI -> (root["models"]?.jsonArray ?: emptyList()).mapNotNull {
+                    // "models/gemini-1.5-flash" -> "gemini-1.5-flash"
+                    it.jsonObject["name"]?.jsonPrimitive?.contentOrNull?.substringAfter("models/")
+                }
+                else -> (root["data"]?.jsonArray ?: emptyList()).mapNotNull {
+                    it.jsonObject["id"]?.jsonPrimitive?.contentOrNull
+                }
+            }
+            ids.filter { it.isNotBlank() }.distinct().sorted()
+        }
+    }
+
+    // ---- OpenAI (and OpenAI-compatible endpoints) ----
     private fun openAiRequest(key: ApiKeyEntry, history: List<ChatMessage>): Request {
         val payload = buildJsonObject {
             put("model", key.model)
@@ -92,7 +128,19 @@ object LlmClient {
                 history.forEach { msg ->
                     addJsonObject {
                         put("role", if (msg.role == Role.USER) "user" else "assistant")
-                        put("content", msg.content)
+                        if (msg.imageBase64 != null) {
+                            putJsonArray("content") {
+                                addJsonObject { put("type", "text"); put("text", msg.content) }
+                                addJsonObject {
+                                    put("type", "image_url")
+                                    put("image_url", buildJsonObject {
+                                        put("url", "data:${msg.imageMime ?: "image/jpeg"};base64,${msg.imageBase64}")
+                                    })
+                                }
+                            }
+                        } else {
+                            put("content", msg.content)
+                        }
                     }
                 }
             }
@@ -124,7 +172,21 @@ object LlmClient {
                 history.forEach { msg ->
                     addJsonObject {
                         put("role", if (msg.role == Role.USER) "user" else "assistant")
-                        put("content", msg.content)
+                        if (msg.imageBase64 != null) {
+                            putJsonArray("content") {
+                                addJsonObject {
+                                    put("type", "image")
+                                    put("source", buildJsonObject {
+                                        put("type", "base64")
+                                        put("media_type", msg.imageMime ?: "image/jpeg")
+                                        put("data", msg.imageBase64)
+                                    })
+                                }
+                                addJsonObject { put("type", "text"); put("text", msg.content) }
+                            }
+                        } else {
+                            put("content", msg.content)
+                        }
                     }
                 }
             }
@@ -156,6 +218,14 @@ object LlmClient {
                         put("role", if (msg.role == Role.USER) "user" else "model")
                         putJsonArray("parts") {
                             addJsonObject { put("text", msg.content) }
+                            if (msg.imageBase64 != null) {
+                                addJsonObject {
+                                    put("inline_data", buildJsonObject {
+                                        put("mime_type", msg.imageMime ?: "image/jpeg")
+                                        put("data", msg.imageBase64)
+                                    })
+                                }
+                            }
                         }
                     }
                 }

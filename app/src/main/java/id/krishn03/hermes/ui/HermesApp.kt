@@ -1,6 +1,12 @@
 package id.krishn03.hermes.ui
 
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -25,6 +31,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.ArrowDropDown
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material3.CircularProgressIndicator
@@ -55,6 +62,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -95,6 +104,7 @@ fun HermesApp(viewModel: ChatViewModel) {
             onSetActive = viewModel::updateActiveKey,
             newBlankKey = viewModel::blankKey,
             onOpenUsage = { showUsage = true },
+            onDetectModels = viewModel::detectModels,
         )
         return
     }
@@ -178,6 +188,7 @@ fun HermesApp(viewModel: ChatViewModel) {
                         MessageList(
                             messages = state.messages,
                             isStreaming = state.isStreaming,
+                            modelName = state.activeKey?.model ?: "Assistant",
                         )
                     }
                 }
@@ -185,8 +196,10 @@ fun HermesApp(viewModel: ChatViewModel) {
                     isStreaming = state.isStreaming,
                     keys = state.keys,
                     activeKey = state.activeKey,
+                    pendingImageBase64 = state.pendingImageBase64,
                     onSelectKey = viewModel::updateActiveKey,
-                    onNewChat = viewModel::newChat,
+                    onAttachImage = viewModel::attachImage,
+                    onClearImage = viewModel::clearPendingImage,
                     onSend = viewModel::send,
                     onStop = viewModel::stopStreaming,
                 )
@@ -232,7 +245,11 @@ private fun EmptyState(hasKey: Boolean) {
 }
 
 @Composable
-private fun MessageList(messages: List<id.krishn03.hermes.data.ChatMessage>, isStreaming: Boolean) {
+private fun MessageList(
+    messages: List<id.krishn03.hermes.data.ChatMessage>,
+    isStreaming: Boolean,
+    modelName: String,
+) {
     val listState = rememberLazyListState()
     // Keep the latest content in view as tokens stream in.
     LaunchedEffect(messages.size, messages.lastOrNull()?.content?.length) {
@@ -252,17 +269,24 @@ private fun MessageList(messages: List<id.krishn03.hermes.data.ChatMessage>, isS
                         shape = RoundedCornerShape(18.dp),
                         modifier = Modifier.widthIn(max = 320.dp),
                     ) {
-                        Text(
-                            text = msg.content,
-                            modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp),
-                            style = MaterialTheme.typography.bodyLarge,
-                            color = MaterialTheme.colorScheme.onSurface,
-                        )
+                        Column(Modifier.padding(horizontal = 16.dp, vertical = 10.dp)) {
+                            msg.imageBase64?.let { b64 ->
+                                MessageImage(b64)
+                                if (msg.content.isNotBlank()) Spacer(Modifier.height(8.dp))
+                            }
+                            if (msg.content.isNotBlank()) {
+                                Text(
+                                    text = msg.content,
+                                    style = MaterialTheme.typography.bodyLarge,
+                                    color = MaterialTheme.colorScheme.onSurface,
+                                )
+                            }
+                        }
                     }
                 }
             } else {
                 if (msg.content.isEmpty() && isStreaming) {
-                    ThinkingIndicator()
+                    ThinkingIndicator(modelName)
                 } else {
                     Text(
                         text = msg.content,
@@ -276,24 +300,44 @@ private fun MessageList(messages: List<id.krishn03.hermes.data.ChatMessage>, isS
     }
 }
 
-/** Small purple circular spinner + a tiny "context" caption, shown while the
- *  assistant's first tokens are still on the way. */
+/** Decodes a base64 image once and renders it as a rounded thumbnail. */
 @Composable
-private fun ThinkingIndicator() {
-    Row(verticalAlignment = Alignment.CenterVertically) {
-        CircularProgressIndicator(
-            modifier = Modifier.size(16.dp),
-            color = HermesPurple,
-            strokeWidth = 2.dp,
-        )
-        Spacer(Modifier.width(8.dp))
-        Text(
-            text = "Thinking…",
-            style = MaterialTheme.typography.bodySmall,
-            fontSize = 12.sp,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
+private fun MessageImage(base64: String) {
+    val bitmap = remember(base64) {
+        runCatching {
+            val bytes = android.util.Base64.decode(base64, android.util.Base64.DEFAULT)
+            android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size)?.asImageBitmap()
+        }.getOrNull()
+    }
+    bitmap?.let {
+        Image(
+            bitmap = it,
+            contentDescription = "Attached image",
+            modifier = Modifier
+                .widthIn(max = 220.dp)
+                .clip(RoundedCornerShape(12.dp)),
         )
     }
+}
+
+/** Minimal "<model> is thinking…" — light-grey serif, gently pulsing. */
+@Composable
+private fun ThinkingIndicator(modelName: String) {
+    val alpha by rememberInfiniteTransition(label = "think").animateFloat(
+        initialValue = 0.35f,
+        targetValue = 1f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(900),
+            repeatMode = RepeatMode.Reverse,
+        ),
+        label = "alpha",
+    )
+    Text(
+        text = "$modelName is thinking…",
+        fontFamily = FontFamily.Serif,
+        fontSize = 16.sp,
+        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = alpha),
+    )
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -302,13 +346,27 @@ private fun InputBar(
     isStreaming: Boolean,
     keys: List<id.krishn03.hermes.data.ApiKeyEntry>,
     activeKey: id.krishn03.hermes.data.ApiKeyEntry?,
+    pendingImageBase64: String?,
     onSelectKey: (String) -> Unit,
-    onNewChat: () -> Unit,
+    onAttachImage: (String, String) -> Unit,
+    onClearImage: () -> Unit,
     onSend: (String) -> Unit,
     onStop: () -> Unit,
 ) {
     var text by remember { mutableStateOf("") }
-    val canSend = text.isNotBlank()
+    val canSend = text.isNotBlank() || pendingImageBase64 != null
+    val context = androidx.compose.ui.platform.LocalContext.current
+    // System photo picker → read the image, base64-encode it, stage it.
+    val picker = androidx.activity.compose.rememberLauncherForActivityResult(
+        androidx.activity.result.contract.ActivityResultContracts.GetContent(),
+    ) { uri ->
+        uri ?: return@rememberLauncherForActivityResult
+        runCatching {
+            val bytes = context.contentResolver.openInputStream(uri)!!.use { it.readBytes() }
+            val mime = context.contentResolver.getType(uri) ?: "image/jpeg"
+            onAttachImage(android.util.Base64.encodeToString(bytes, android.util.Base64.NO_WRAP), mime)
+        }
+    }
 
     Surface(color = MaterialTheme.colorScheme.background) {
         // Floating rounded input container.
@@ -320,6 +378,21 @@ private fun InputBar(
                 .padding(horizontal = 12.dp, vertical = 8.dp),
         ) {
             Column(Modifier.padding(horizontal = 16.dp, vertical = 12.dp)) {
+                // Staged-image chip, removable.
+                if (pendingImageBase64 != null) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        MessageImage(pendingImageBase64)
+                        Spacer(Modifier.width(8.dp))
+                        IconButton(onClick = onClearImage, modifier = Modifier.size(28.dp)) {
+                            Icon(
+                                Icons.Filled.Close,
+                                contentDescription = "Remove image",
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                    }
+                    Spacer(Modifier.height(8.dp))
+                }
                 // Text field — transparent, sits inside the container.
                 Box(Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
                     if (text.isEmpty()) {
@@ -347,16 +420,16 @@ private fun InputBar(
                     Modifier.fillMaxWidth(),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    // "+" — dark circular button.
+                    // "+" — attach an image.
                     Surface(
                         shape = CircleShape,
                         color = MaterialTheme.colorScheme.surfaceVariant,
                         modifier = Modifier.size(40.dp),
                     ) {
-                        IconButton(onClick = onNewChat) {
+                        IconButton(onClick = { picker.launch("image/*") }) {
                             Icon(
                                 Icons.Filled.Add,
-                                contentDescription = "New chat",
+                                contentDescription = "Attach image",
                                 tint = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
                         }
@@ -381,7 +454,7 @@ private fun InputBar(
                             onClick = {
                                 if (isStreaming) onStop()
                                 else if (canSend) {
-                                    onSend(text)
+                                    onSend(text.ifBlank { "What's in this image?" })
                                     text = ""
                                 }
                             },

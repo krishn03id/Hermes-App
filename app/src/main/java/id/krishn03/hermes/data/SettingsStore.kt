@@ -25,6 +25,7 @@ class SettingsStore(private val context: Context) {
     private val keysKey = stringPreferencesKey("api_keys")
     private val activeKey = stringPreferencesKey("active_key_id")
     private val usageKey = stringPreferencesKey("usage_stats")
+    private val chatKey = stringPreferencesKey("chat_history")
 
     val keys: Flow<List<ApiKeyEntry>> = context.dataStore.data.map { prefs ->
         prefs[keysKey]?.let { raw ->
@@ -33,6 +34,20 @@ class SettingsStore(private val context: Context) {
     }
 
     val activeKeyId: Flow<String?> = context.dataStore.data.map { it[activeKey] }
+
+    /** The last chat session, restored on relaunch. */
+    val chat: Flow<List<ChatMessage>> = context.dataStore.data.map { prefs ->
+        prefs[chatKey]?.let { raw ->
+            runCatching { json.decodeFromString<List<ChatMessage>>(raw) }.getOrDefault(emptyList())
+        } ?: emptyList()
+    }
+
+    suspend fun saveChat(list: List<ChatMessage>) {
+        // ponytail: drop image blobs before persisting — keeps the prefs entry
+        // small; reopened chats show text only, which is fine for history.
+        val slim = list.map { it.copy(imageBase64 = null, imageMime = null) }
+        context.dataStore.edit { it[chatKey] = json.encodeToString(slim) }
+    }
 
     val usage: Flow<List<UsageStat>> = context.dataStore.data.map { prefs ->
         prefs[usageKey]?.let { raw ->

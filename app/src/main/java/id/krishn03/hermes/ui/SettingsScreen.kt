@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -26,6 +27,8 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FloatingActionButton
@@ -42,6 +45,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -49,6 +53,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import id.krishn03.hermes.data.ApiKeyEntry
 import id.krishn03.hermes.data.Provider
+import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -61,6 +66,7 @@ fun SettingsScreen(
     onSetActive: (String) -> Unit,
     newBlankKey: (Provider) -> ApiKeyEntry,
     onOpenUsage: () -> Unit,
+    onDetectModels: suspend (ApiKeyEntry) -> List<String>,
 ) {
     var editing by remember { mutableStateOf<ApiKeyEntry?>(null) }
 
@@ -68,6 +74,7 @@ fun SettingsScreen(
         KeyEditor(
             initial = entry,
             onDismiss = { editing = null },
+            onDetectModels = onDetectModels,
             onConfirm = {
                 onSave(it)
                 editing = null
@@ -227,6 +234,7 @@ private fun KeyCard(
 private fun KeyEditor(
     initial: ApiKeyEntry,
     onDismiss: () -> Unit,
+    onDetectModels: suspend (ApiKeyEntry) -> List<String>,
     onConfirm: (ApiKeyEntry) -> Unit,
 ) {
     var label by remember { mutableStateOf(initial.label) }
@@ -238,6 +246,12 @@ private fun KeyEditor(
     var headers by remember {
         mutableStateOf(initial.customHeaders.map { it.key to it.value })
     }
+    // Model auto-detect state.
+    val scope = rememberCoroutineScope()
+    var detecting by remember { mutableStateOf(false) }
+    var detectError by remember { mutableStateOf<String?>(null) }
+    var models by remember { mutableStateOf<List<String>>(emptyList()) }
+    var modelsExpanded by remember { mutableStateOf(false) }
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -301,13 +315,69 @@ private fun KeyEditor(
                     modifier = Modifier.fillMaxWidth(),
                 )
                 Spacer(Modifier.height(8.dp))
-                OutlinedTextField(
-                    value = model,
-                    onValueChange = { model = it },
-                    label = { Text("Model") },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth(),
-                )
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    OutlinedTextField(
+                        value = model,
+                        onValueChange = { model = it },
+                        label = { Text("Model") },
+                        singleLine = true,
+                        modifier = Modifier.weight(1f),
+                    )
+                    Spacer(Modifier.width(8.dp))
+                    Box {
+                        if (detecting) {
+                            androidx.compose.material3.CircularProgressIndicator(
+                                modifier = Modifier.size(24.dp),
+                                strokeWidth = 2.dp,
+                            )
+                        } else {
+                            AssistChip(
+                                onClick = {
+                                    detectError = null
+                                    detecting = true
+                                    scope.launch {
+                                        val probe = initial.copy(
+                                            provider = provider,
+                                            key = key.trim(),
+                                            baseUrl = baseUrl.trim().ifBlank { provider.defaultBaseUrl() },
+                                        )
+                                        val result = runCatching { onDetectModels(probe) }
+                                        detecting = false
+                                        result.onSuccess {
+                                            models = it
+                                            modelsExpanded = it.isNotEmpty()
+                                            if (it.isEmpty()) detectError = "No models returned"
+                                        }.onFailure { detectError = it.message ?: "Detect failed" }
+                                    }
+                                },
+                                enabled = key.isNotBlank(),
+                                label = { Text("Detect") },
+                            )
+                        }
+                        DropdownMenu(
+                            expanded = modelsExpanded,
+                            onDismissRequest = { modelsExpanded = false },
+                        ) {
+                            models.forEach { m ->
+                                DropdownMenuItem(
+                                    text = { Text(m) },
+                                    onClick = {
+                                        model = m
+                                        modelsExpanded = false
+                                    },
+                                )
+                            }
+                        }
+                    }
+                }
+                detectError?.let {
+                    Text(
+                        text = it,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error,
+                        modifier = Modifier.padding(top = 4.dp),
+                    )
+                }
                 Spacer(Modifier.height(8.dp))
                 OutlinedTextField(
                     value = baseUrl,

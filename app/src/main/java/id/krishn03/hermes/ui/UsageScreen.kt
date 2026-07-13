@@ -60,15 +60,15 @@ fun UsageScreen(
     onBack: () -> Unit,
     onClear: () -> Unit,
 ) {
-    // Weight slices by messages sent per model.
-    val total = usage.sumOf { it.messages }.coerceAtLeast(1)
+    // Weight slices by tokens used per model (estimated from chars received).
+    val total = usage.sumOf { it.estTokens }.coerceAtLeast(1)
     val slices = usage
-        .sortedByDescending { it.messages }
+        .sortedByDescending { it.estTokens }
         .mapIndexed { i, stat ->
             SliceData(
                 label = stat.model,
-                sub = "${stat.provider.label} · ${stat.messages} msg · ${formatChars(stat.charsReceived)}",
-                fraction = stat.messages.toFloat() / total,
+                sub = "${stat.provider.label} · ${stat.messages} msg · ${formatTokens(stat.estTokens)}",
+                fraction = stat.estTokens.toFloat() / total,
                 color = SliceColors[i % SliceColors.size],
             )
         }
@@ -126,8 +126,12 @@ fun UsageScreen(
                         modifier = Modifier
                             .size(200.dp)
                             .aspectRatio(1f),
-                        centerLabel = "$total",
-                        centerSub = "messages",
+                        centerLabel = when {
+                            total >= 1_000_000 -> "%.1fM".format(total / 1_000_000.0)
+                            total >= 1_000 -> "%.1fk".format(total / 1_000.0)
+                            else -> "$total"
+                        },
+                        centerSub = "tokens",
                     )
                 }
             }
@@ -230,8 +234,8 @@ private fun LegendRow(slice: SliceData) {
     }
 }
 
-private fun formatChars(chars: Long): String = when {
-    chars >= 1_000_000 -> "%.1fM chars".format(chars / 1_000_000.0)
-    chars >= 1_000 -> "%.1fk chars".format(chars / 1_000.0)
-    else -> "$chars chars"
+private fun formatTokens(tokens: Long): String = when {
+    tokens >= 1_000_000 -> "%.1fM tokens".format(tokens / 1_000_000.0)
+    tokens >= 1_000 -> "%.1fk tokens".format(tokens / 1_000.0)
+    else -> "$tokens tokens"
 }

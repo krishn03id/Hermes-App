@@ -17,8 +17,24 @@ android {
         versionName = "1.0"
     }
 
+    // One committed keystore so every CI build is signed identically. Without
+    // this, each run generates a throwaway debug key and Android refuses to
+    // install the new APK over the old one ("conflicts with existing package").
+    signingConfigs {
+        create("shared") {
+            storeFile = file("hermes.keystore")
+            storePassword = "hermes123"
+            keyAlias = "hermes"
+            keyPassword = "hermes123"
+        }
+    }
+
     buildTypes {
+        debug {
+            signingConfig = signingConfigs.getByName("shared")
+        }
         release {
+            signingConfig = signingConfigs.getByName("shared")
             isMinifyEnabled = false
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),

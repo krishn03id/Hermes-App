@@ -16,6 +16,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 
@@ -25,6 +26,9 @@ data class ChatUiState(
     val activeKeyId: String? = null,
     val isStreaming: Boolean = false,
     val error: String? = null,
+    /** Image staged by the [+] button, sent with the next message. */
+    val pendingImageBase64: String? = null,
+    val pendingImageMime: String? = null,
 ) {
     val activeKey: ApiKeyEntry?
         get() = keys.firstOrNull { it.id == activeKeyId } ?: keys.firstOrNull()
@@ -50,13 +54,36 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                     _ui.value = _ui.value.copy(keys = keys, activeKeyId = active)
                 }
         }
+        // Restore the last chat session once, on startup.
+        viewModelScope.launch {
+            val saved = store.chat.first()
+            if (saved.isNotEmpty() && _ui.value.messages.isEmpty()) {
+                _ui.value = _ui.value.copy(messages = saved)
+            }
+        }
     }
 
     fun updateActiveKey(id: String) = viewModelScope.launch { store.setActive(id) }
 
+    /** Stages an image (base64) to attach to the next sent message. */
+    fun attachImage(base64: String, mime: String) {
+        _ui.value = _ui.value.copy(pendingImageBase64 = base64, pendingImageMime = mime)
+    }
+
+    fun clearPendingImage() {
+        _ui.value = _ui.value.copy(pendingImageBase64 = null, pendingImageMime = null)
+    }
+
+    /** Fetches the provider's model list for the Settings auto-detect. */
+    suspend fun detectModels(entry: ApiKeyEntry): List<String> = LlmClient.listModels(entry)
+
     fun newChat() {
         streamJob?.cancel()
-        _ui.value = _ui.value.copy(messages = emptyList(), isStreaming = false, error = null)
+        _ui.value = _ui.value.copy(
+            messages = emptyList(), isStreaming = false, error = null,
+            pendingImageBase64 = null, pendingImageMime = null,
+        )
+        viewModelScope.launch { store.saveChat(emptyList()) }
     }
 
     fun stopStreaming() {
@@ -73,12 +100,19 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
             return
         }
 
-        val history = _ui.value.messages + ChatMessage(Role.USER, prompt)
+        val history = _ui.value.messages + ChatMessage(
+            role = Role.USER,
+            content = prompt,
+            imageBase64 = _ui.value.pendingImageBase64,
+            imageMime = _ui.value.pendingImageMime,
+        )
         // Append the user message plus an empty assistant message we stream into.
         _ui.value = _ui.value.copy(
             messages = history + ChatMessage(Role.ASSISTANT, ""),
             isStreaming = true,
             error = null,
+            pendingImageBase64 = null,
+            pendingImageMime = null,
         )
 
         streamJob = viewModelScope.launch {
@@ -111,6 +145,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                 )
             } finally {
                 _ui.value = _ui.value.copy(isStreaming = false)
+                store.saveChat(_ui.value.messages)
             }
         }
     }

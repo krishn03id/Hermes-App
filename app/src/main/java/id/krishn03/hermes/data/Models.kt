@@ -47,6 +47,9 @@ enum class Role { USER, ASSISTANT }
 data class ChatMessage(
     val role: Role,
     val content: String,
+    /** Optional attached image, base64-encoded, for vision-capable models. */
+    val imageBase64: String? = null,
+    val imageMime: String? = null,
 )
 
 /**
@@ -60,5 +63,8 @@ data class UsageStat(
     val provider: Provider,
     val messages: Long = 0,
     val charsReceived: Long = 0,
-)
+) {
+    /** Rough token estimate: ~4 chars/token, the usual English heuristic. */
+    val estTokens: Long get() = (charsReceived + 3) / 4
+}
 
