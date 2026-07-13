@@ -250,7 +250,7 @@ private fun KeyEditor(
     val scope = rememberCoroutineScope()
     var detecting by remember { mutableStateOf(false) }
     var detectError by remember { mutableStateOf<String?>(null) }
-    var models by remember { mutableStateOf<List<String>>(emptyList()) }
+    var models by remember { mutableStateOf(initial.models) }
     var modelsExpanded by remember { mutableStateOf(false) }
 
     AlertDialog(
@@ -265,6 +265,7 @@ private fun KeyEditor(
                             key = key.trim(),
                             model = model.trim().ifBlank { provider.defaultModel() },
                             baseUrl = baseUrl.trim().ifBlank { provider.defaultBaseUrl() },
+                            models = models,
                             customHeaders = headers
                                 .filter { it.first.isNotBlank() }
                                 .associate { it.first.trim() to it.second },
@@ -346,6 +347,8 @@ private fun KeyEditor(
                                         result.onSuccess {
                                             models = it
                                             modelsExpanded = it.isNotEmpty()
+                                            // Auto-pick the first if none set yet.
+                                            if (it.isNotEmpty() && model.isBlank()) model = it.first()
                                             if (it.isEmpty()) detectError = "No models returned"
                                         }.onFailure { detectError = it.message ?: "Detect failed" }
                                     }

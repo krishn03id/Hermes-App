@@ -15,6 +15,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -31,9 +32,12 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.ArrowDropDown
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.Stop
+import androidx.compose.material.icons.filled.SwapHoriz
+import androidx.compose.material.icons.filled.Terminal
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -136,6 +140,12 @@ fun HermesApp(viewModel: ChatViewModel) {
                     scope.launch { drawerState.close() }
                     showSettings = true
                 },
+                onDemo = { feature ->
+                    scope.launch {
+                        drawerState.close()
+                        snackbarHost.showSnackbar("$feature — coming soon")
+                    }
+                },
             )
         },
     ) {
@@ -161,13 +171,22 @@ fun HermesApp(viewModel: ChatViewModel) {
                         }
                     },
                     actions = {
-                        IconButton(onClick = { viewModel.newChat() }) {
+                        // Terminal — demo only.
+                        IconButton(onClick = {
+                            scope.launch { snackbarHost.showSnackbar("Terminal — coming soon") }
+                        }) {
                             Icon(
-                                painter = painterResource(R.drawable.ic_ghost),
-                                contentDescription = "New temporary chat",
+                                Icons.Filled.Terminal,
+                                contentDescription = "Terminal",
                                 tint = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
                         }
+                        // Provider switcher — fully working.
+                        ProviderMenu(
+                            keys = state.keys,
+                            activeProvider = state.activeKey?.provider,
+                            onSelectProvider = viewModel::selectProvider,
+                        )
                     },
                     colors = TopAppBarDefaults.topAppBarColors(
                         containerColor = MaterialTheme.colorScheme.background,
@@ -198,6 +217,7 @@ fun HermesApp(viewModel: ChatViewModel) {
                     activeKey = state.activeKey,
                     pendingImageBase64 = state.pendingImageBase64,
                     onSelectKey = viewModel::updateActiveKey,
+                    onSelectModel = viewModel::selectModel,
                     onAttachImage = viewModel::attachImage,
                     onClearImage = viewModel::clearPendingImage,
                     onSend = viewModel::send,
@@ -290,8 +310,12 @@ private fun MessageList(
                 } else {
                     Text(
                         text = msg.content,
-                        modifier = Modifier.fillMaxWidth(),
-                        style = MaterialTheme.typography.bodyLarge,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(end = 8.dp),
+                        style = MaterialTheme.typography.bodyLarge.copy(
+                            lineHeight = 26.sp,
+                        ),
                         color = MaterialTheme.colorScheme.onBackground,
                     )
                 }
@@ -348,6 +372,7 @@ private fun InputBar(
     activeKey: id.krishn03.hermes.data.ApiKeyEntry?,
     pendingImageBase64: String?,
     onSelectKey: (String) -> Unit,
+    onSelectModel: (String) -> Unit,
     onAttachImage: (String, String) -> Unit,
     onClearImage: () -> Unit,
     onSend: (String) -> Unit,
@@ -439,6 +464,7 @@ private fun InputBar(
                         keys = keys,
                         activeKey = activeKey,
                         onSelectKey = onSelectKey,
+                        onSelectModel = onSelectModel,
                     )
                     Spacer(Modifier.weight(1f))
                     // Send / stop — solid off-white circle with a dark glyph.
@@ -474,13 +500,15 @@ private fun InputBar(
     }
 }
 
-/** Rounded pill that shows the active model and opens a picker of all keys. */
+/** Rounded pill showing the active model. The dropdown lists every model of
+ *  every key — pick a model directly, or switch to another key's default. */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun ModelPill(
     keys: List<id.krishn03.hermes.data.ApiKeyEntry>,
     activeKey: id.krishn03.hermes.data.ApiKeyEntry?,
     onSelectKey: (String) -> Unit,
+    onSelectModel: (String) -> Unit,
 ) {
     var expanded by remember { mutableStateOf(false) }
     Box {
@@ -498,15 +526,9 @@ private fun ModelPill(
                     style = MaterialTheme.typography.bodyMedium,
                     fontWeight = FontWeight.SemiBold,
                     color = MaterialTheme.colorScheme.onSurface,
+                    maxLines = 1,
+                    modifier = Modifier.widthIn(max = 160.dp),
                 )
-                activeKey?.let {
-                    Spacer(Modifier.width(6.dp))
-                    Text(
-                        text = it.provider.label,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
                 Icon(
                     Icons.Filled.ArrowDropDown,
                     contentDescription = "Choose model",
@@ -514,21 +536,68 @@ private fun ModelPill(
                 )
             }
         }
-        DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+        DropdownMenu(
+            expanded = expanded,
+            onDismissRequest = { expanded = false },
+            modifier = Modifier.heightIn(max = 420.dp),
+        ) {
             keys.forEach { key ->
+                // One header per key (its provider), then every detected model.
+                Text(
+                    text = key.label.ifBlank { key.provider.label },
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    fontWeight = FontWeight.SemiBold,
+                    modifier = Modifier.padding(start = 16.dp, top = 10.dp, bottom = 2.dp),
+                )
+                val models = key.models.ifEmpty { listOf(key.model) }
+                models.forEach { m ->
+                    val isActive = key.id == activeKey?.id && m == activeKey?.model
+                    DropdownMenuItem(
+                        leadingIcon = {
+                            if (isActive) Icon(Icons.Filled.Check, contentDescription = null)
+                        },
+                        text = { Text(m, maxLines = 1) },
+                        onClick = {
+                            if (key.id != activeKey?.id) onSelectKey(key.id)
+                            onSelectModel(m)
+                            expanded = false
+                        },
+                    )
+                }
+            }
+        }
+    }
+}
+
+/** Top-bar provider switcher. Lists providers that have at least one key. */
+@Composable
+private fun ProviderMenu(
+    keys: List<id.krishn03.hermes.data.ApiKeyEntry>,
+    activeProvider: id.krishn03.hermes.data.Provider?,
+    onSelectProvider: (id.krishn03.hermes.data.Provider) -> Unit,
+) {
+    var expanded by remember { mutableStateOf(false) }
+    val available = remember(keys) { keys.map { it.provider }.distinct() }
+    Box {
+        IconButton(onClick = { if (available.isNotEmpty()) expanded = true }) {
+            Icon(
+                Icons.Filled.SwapHoriz,
+                contentDescription = "Switch provider",
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+            available.forEach { provider ->
                 DropdownMenuItem(
-                    text = {
-                        Column {
-                            Text(key.label.ifBlank { key.model }, fontWeight = FontWeight.Medium)
-                            Text(
-                                "${key.provider.label} · ${key.model}",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
+                    leadingIcon = {
+                        if (provider == activeProvider) {
+                            Icon(Icons.Filled.Check, contentDescription = null)
                         }
                     },
+                    text = { Text(provider.label) },
                     onClick = {
-                        onSelectKey(key.id)
+                        onSelectProvider(provider)
                         expanded = false
                     },
                 )

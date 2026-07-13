@@ -14,6 +14,9 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Extension
+import androidx.compose.material.icons.filled.Hub
+import androidx.compose.material.icons.filled.Memory
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -37,6 +40,7 @@ fun SidebarContent(
     onNewChat: () -> Unit,
     onSelectKey: (String) -> Unit,
     onOpenSettings: () -> Unit,
+    onDemo: (String) -> Unit,
 ) {
     ModalDrawerSheet(
         drawerContainerColor = MaterialTheme.colorScheme.surfaceContainer,
@@ -115,6 +119,33 @@ fun SidebarContent(
                 }
             }
 
+            NavigationDrawerItem(
+                icon = { Icon(Icons.Filled.Hub, contentDescription = null) },
+                label = { Text("MCP") },
+                selected = false,
+                onClick = { onDemo("MCP") },
+                colors = NavigationDrawerItemDefaults.colors(
+                    unselectedContainerColor = androidx.compose.ui.graphics.Color.Transparent,
+                ),
+            )
+            NavigationDrawerItem(
+                icon = { Icon(Icons.Filled.Memory, contentDescription = null) },
+                label = { Text("Memory") },
+                selected = false,
+                onClick = { onDemo("Memory") },
+                colors = NavigationDrawerItemDefaults.colors(
+                    unselectedContainerColor = androidx.compose.ui.graphics.Color.Transparent,
+                ),
+            )
+            NavigationDrawerItem(
+                icon = { Icon(Icons.Filled.Extension, contentDescription = null) },
+                label = { Text("Plugins") },
+                selected = false,
+                onClick = { onDemo("Plugins") },
+                colors = NavigationDrawerItemDefaults.colors(
+                    unselectedContainerColor = androidx.compose.ui.graphics.Color.Transparent,
+                ),
+            )
             NavigationDrawerItem(
                 icon = { Icon(Icons.Filled.Settings, contentDescription = null) },
                 label = { Text("Settings") },

@@ -36,6 +36,9 @@ data class ApiKeyEntry(
     val key: String,
     val model: String,
     val baseUrl: String,
+    /** All models available for this key, populated by auto-detect. The chat
+     *  model-picker lists every one; [model] is the currently selected one. */
+    val models: List<String> = emptyList(),
     /** Extra HTTP headers sent with every request for this key (e.g. gateway
      *  auth, org routing). Applied last, so they can override defaults. */
     val customHeaders: Map<String, String> = emptyMap(),

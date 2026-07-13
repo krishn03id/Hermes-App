@@ -11,6 +11,8 @@ import id.krishn03.hermes.data.SettingsStore
 import id.krishn03.hermes.data.UsageStat
 import id.krishn03.hermes.net.LlmClient
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -64,6 +66,18 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun updateActiveKey(id: String) = viewModelScope.launch { store.setActive(id) }
+
+    /** Switches the model on the active key (in-place, persisted). */
+    fun selectModel(model: String) = viewModelScope.launch {
+        val key = _ui.value.activeKey ?: return@launch
+        val list = _ui.value.keys.map { if (it.id == key.id) it.copy(model = model) else it }
+        store.saveKeys(list)
+    }
+
+    /** Switches to the first configured key of the given provider, if any. */
+    fun selectProvider(provider: Provider) = viewModelScope.launch {
+        _ui.value.keys.firstOrNull { it.provider == provider }?.let { store.setActive(it.id) }
+    }
 
     /** Stages an image (base64) to attach to the next sent message. */
     fun attachImage(base64: String, mime: String) {
@@ -145,7 +159,9 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                 )
             } finally {
                 _ui.value = _ui.value.copy(isStreaming = false)
-                store.saveChat(_ui.value.messages)
+                // NonCancellable: on Stop/newChat this coroutine is cancelled, and
+                // a plain suspend save here would itself throw and drop the write.
+                withContext(NonCancellable) { store.saveChat(_ui.value.messages) }
             }
         }
     }
