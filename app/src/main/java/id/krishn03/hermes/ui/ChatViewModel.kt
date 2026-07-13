@@ -8,12 +8,15 @@ import id.krishn03.hermes.data.ChatMessage
 import id.krishn03.hermes.data.Provider
 import id.krishn03.hermes.data.Role
 import id.krishn03.hermes.data.SettingsStore
+import id.krishn03.hermes.data.UsageStat
 import id.krishn03.hermes.net.LlmClient
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 
 data class ChatUiState(
@@ -33,6 +36,10 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
 
     private val _ui = MutableStateFlow(ChatUiState())
     val ui: StateFlow<ChatUiState> = _ui.asStateFlow()
+
+    /** Per-model usage, surfaced to the Usage screen as a pie chart. */
+    val usage: StateFlow<List<UsageStat>> = store.usage
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
     private var streamJob: Job? = null
 
@@ -75,8 +82,10 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         )
 
         streamJob = viewModelScope.launch {
+            var received = 0L
             try {
                 LlmClient.stream(key, history) { token ->
+                    received += token.length
                     val msgs = _ui.value.messages.toMutableList()
                     val last = msgs.lastOrNull() ?: return@stream
                     if (last.role == Role.ASSISTANT) {
@@ -84,7 +93,10 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                         _ui.value = _ui.value.copy(messages = msgs)
                     }
                 }
+                // Tally this exchange only once it produced output.
+                if (received > 0) store.recordUsage(key.model, key.provider, received)
             } catch (e: kotlinx.coroutines.CancellationException) {
+                if (received > 0) store.recordUsage(key.model, key.provider, received)
                 throw e
             } catch (e: Exception) {
                 val msgs = _ui.value.messages.toMutableList()
@@ -106,6 +118,8 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
     fun dismissError() {
         _ui.value = _ui.value.copy(error = null)
     }
+
+    fun clearUsage() = viewModelScope.launch { store.clearUsage() }
 
     // ---- Settings: key management ----
 

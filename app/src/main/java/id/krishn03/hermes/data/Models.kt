@@ -48,3 +48,17 @@ data class ChatMessage(
     val role: Role,
     val content: String,
 )
+
+/**
+ * Per-model usage counters, accumulated on device. We don't get exact token
+ * counts from a streamed response without extra parsing, so we track something
+ * honest and useful: number of messages sent and characters received.
+ */
+@Serializable
+data class UsageStat(
+    val model: String,
+    val provider: Provider,
+    val messages: Long = 0,
+    val charsReceived: Long = 0,
+)
+

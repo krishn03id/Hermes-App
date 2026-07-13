@@ -25,6 +25,7 @@ import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.Stop
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DrawerValue
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
@@ -55,8 +56,10 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import id.krishn03.hermes.data.Role
+import id.krishn03.hermes.ui.theme.HermesPurple
 import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -64,6 +67,17 @@ import kotlinx.coroutines.launch
 fun HermesApp(viewModel: ChatViewModel) {
     val state by viewModel.ui.collectAsStateWithLifecycle()
     var showSettings by remember { mutableStateOf(false) }
+    var showUsage by remember { mutableStateOf(false) }
+
+    if (showUsage) {
+        val usage by viewModel.usage.collectAsStateWithLifecycle()
+        UsageScreen(
+            usage = usage,
+            onBack = { showUsage = false },
+            onClear = viewModel::clearUsage,
+        )
+        return
+    }
 
     if (showSettings) {
         SettingsScreen(
@@ -74,6 +88,7 @@ fun HermesApp(viewModel: ChatViewModel) {
             onDelete = viewModel::deleteKey,
             onSetActive = viewModel::updateActiveKey,
             newBlankKey = viewModel::blankKey,
+            onOpenUsage = { showUsage = true },
         )
         return
     }
@@ -224,15 +239,38 @@ private fun MessageList(messages: List<id.krishn03.hermes.data.ChatMessage>, isS
                     }
                 }
             } else {
-                val text = if (msg.content.isEmpty() && isStreaming) "▍" else msg.content
-                Text(
-                    text = text,
-                    modifier = Modifier.fillMaxWidth(),
-                    style = MaterialTheme.typography.bodyLarge,
-                    color = MaterialTheme.colorScheme.onBackground,
-                )
+                if (msg.content.isEmpty() && isStreaming) {
+                    ThinkingIndicator()
+                } else {
+                    Text(
+                        text = msg.content,
+                        modifier = Modifier.fillMaxWidth(),
+                        style = MaterialTheme.typography.bodyLarge,
+                        color = MaterialTheme.colorScheme.onBackground,
+                    )
+                }
             }
         }
+    }
+}
+
+/** Small purple circular spinner + a tiny "context" caption, shown while the
+ *  assistant's first tokens are still on the way. */
+@Composable
+private fun ThinkingIndicator() {
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        CircularProgressIndicator(
+            modifier = Modifier.size(16.dp),
+            color = HermesPurple,
+            strokeWidth = 2.dp,
+        )
+        Spacer(Modifier.width(8.dp))
+        Text(
+            text = "Thinking…",
+            style = MaterialTheme.typography.bodySmall,
+            fontSize = 12.sp,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
     }
 }
 
@@ -245,8 +283,17 @@ private fun InputBar(isStreaming: Boolean, onSend: (String) -> Unit, onStop: () 
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(horizontal = 12.dp, vertical = 8.dp),
-            verticalAlignment = Alignment.Bottom,
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
+            // Left action — mirrors the send button on the right for symmetry.
+            RoundIconButton(
+                icon = Icons.Filled.Add,
+                contentDescription = "New chat",
+                container = MaterialTheme.colorScheme.surfaceVariant,
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                onClick = { text = "" },
+            )
             TextField(
                 value = text,
                 onValueChange = { text = it },
@@ -263,32 +310,45 @@ private fun InputBar(isStreaming: Boolean, onSend: (String) -> Unit, onStop: () 
                     disabledIndicatorColor = androidx.compose.ui.graphics.Color.Transparent,
                 ),
             )
-            Spacer(Modifier.width(8.dp))
             val canSend = text.isNotBlank()
-            Surface(
-                shape = CircleShape,
-                color = if (isStreaming || canSend) MaterialTheme.colorScheme.primary
+            RoundIconButton(
+                icon = if (isStreaming) Icons.Filled.Stop else Icons.AutoMirrored.Filled.Send,
+                contentDescription = if (isStreaming) "Stop" else "Send",
+                container = if (isStreaming || canSend) MaterialTheme.colorScheme.primary
                 else MaterialTheme.colorScheme.surfaceVariant,
-                modifier = Modifier.size(48.dp),
-            ) {
-                IconButton(
-                    onClick = {
-                        if (isStreaming) {
-                            onStop()
-                        } else if (canSend) {
-                            onSend(text)
-                            text = ""
-                        }
-                    },
-                    enabled = isStreaming || canSend,
-                ) {
-                    Icon(
-                        imageVector = if (isStreaming) Icons.Filled.Stop else Icons.AutoMirrored.Filled.Send,
-                        contentDescription = if (isStreaming) "Stop" else "Send",
-                        tint = MaterialTheme.colorScheme.onPrimary,
-                    )
-                }
-            }
+                tint = if (isStreaming || canSend) MaterialTheme.colorScheme.onPrimary
+                else MaterialTheme.colorScheme.onSurfaceVariant,
+                enabled = isStreaming || canSend,
+                onClick = {
+                    if (isStreaming) {
+                        onStop()
+                    } else if (canSend) {
+                        onSend(text)
+                        text = ""
+                    }
+                },
+            )
+        }
+    }
+}
+
+/** A fixed-size circular icon button so both ends of the input bar match. */
+@Composable
+private fun RoundIconButton(
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    contentDescription: String,
+    container: androidx.compose.ui.graphics.Color,
+    tint: androidx.compose.ui.graphics.Color,
+    enabled: Boolean = true,
+    onClick: () -> Unit,
+) {
+    Surface(
+        shape = CircleShape,
+        color = container,
+        modifier = Modifier.size(44.dp),
+    ) {
+        IconButton(onClick = onClick, enabled = enabled) {
+            Icon(imageVector = icon, contentDescription = contentDescription, tint = tint)
         }
     }
 }

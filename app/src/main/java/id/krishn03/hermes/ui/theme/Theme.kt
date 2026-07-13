@@ -16,6 +16,9 @@ import androidx.compose.ui.unit.sp
 private val Clay = Color(0xFFD97757)
 private val ClayDim = Color(0xFFC96442)
 
+/** Loading / progress accent — a soft purple, per request. */
+val HermesPurple = Color(0xFF6C5CE7)
+
 private val LightColors = lightColorScheme(
     primary = ClayDim,
     onPrimary = Color(0xFFFFFFFF),

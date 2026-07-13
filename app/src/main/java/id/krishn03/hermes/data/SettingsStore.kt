@@ -24,6 +24,7 @@ class SettingsStore(private val context: Context) {
 
     private val keysKey = stringPreferencesKey("api_keys")
     private val activeKey = stringPreferencesKey("active_key_id")
+    private val usageKey = stringPreferencesKey("usage_stats")
 
     val keys: Flow<List<ApiKeyEntry>> = context.dataStore.data.map { prefs ->
         prefs[keysKey]?.let { raw ->
@@ -33,6 +34,12 @@ class SettingsStore(private val context: Context) {
 
     val activeKeyId: Flow<String?> = context.dataStore.data.map { it[activeKey] }
 
+    val usage: Flow<List<UsageStat>> = context.dataStore.data.map { prefs ->
+        prefs[usageKey]?.let { raw ->
+            runCatching { json.decodeFromString<List<UsageStat>>(raw) }.getOrDefault(emptyList())
+        } ?: emptyList()
+    }
+
     suspend fun saveKeys(list: List<ApiKeyEntry>) {
         context.dataStore.edit { it[keysKey] = json.encodeToString(list) }
     }
@@ -41,5 +48,27 @@ class SettingsStore(private val context: Context) {
         context.dataStore.edit { prefs ->
             if (id == null) prefs.remove(activeKey) else prefs[activeKey] = id
         }
+    }
+
+    /** Folds one completed exchange into the per-model usage tally. */
+    suspend fun recordUsage(model: String, provider: Provider, charsReceived: Long) {
+        context.dataStore.edit { prefs ->
+            val current = prefs[usageKey]?.let {
+                runCatching { json.decodeFromString<List<UsageStat>>(it) }.getOrDefault(emptyList())
+            } ?: emptyList()
+            val list = current.toMutableList()
+            val idx = list.indexOfFirst { it.model == model && it.provider == provider }
+            if (idx >= 0) {
+                val s = list[idx]
+                list[idx] = s.copy(messages = s.messages + 1, charsReceived = s.charsReceived + charsReceived)
+            } else {
+                list.add(UsageStat(model, provider, messages = 1, charsReceived = charsReceived))
+            }
+            prefs[usageKey] = json.encodeToString(list)
+        }
+    }
+
+    suspend fun clearUsage() {
+        context.dataStore.edit { it.remove(usageKey) }
     }
 }
