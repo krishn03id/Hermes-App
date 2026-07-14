@@ -34,6 +34,7 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.PowerSettingsNew
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -63,9 +64,9 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import com.termux.terminal.TerminalSession
-import com.termux.terminal.TerminalSessionClient
 import com.termux.view.TerminalView
 import com.termux.view.TerminalViewClient
+import id.krishn03.hermes.terminal.TerminalHost
 import id.krishn03.hermes.terminal.TermuxBootstrap
 
 private enum class TermPhase { CHOOSE, INSTALLING, BOOTSTRAP, BASIC }
@@ -206,69 +207,21 @@ private fun TerminalContent(onBack: () -> Unit, useBootstrap: Boolean) {
 
     // Shared one-shot Ctrl/Alt/Shift state (extra-keys row <-> view client).
     val mods = remember { TermModifiers() }
-    val viewHolder = remember { object { var view: TerminalView? = null } }
 
-    // Ensure existing bootstrap installs get updated helper scripts.
-    if (useBootstrap) {
-        LaunchedEffect(Unit) { TermuxBootstrap.refreshScripts(context) }
+    // Rewrite apt.conf / helper scripts BEFORE the shell launches, so the very
+    // first `apt update` sees the correct (relocated + CaInfo) config. Must be
+    // synchronous — a LaunchedEffect would race the session start below.
+    if (useBootstrap && TerminalHost.session == null) {
+        TermuxBootstrap.refreshScripts(context)
     }
 
-    val session = remember {
-        val sessionClient = object : TerminalSessionClient {
-            override fun onTextChanged(changedSession: TerminalSession) {
-                viewHolder.view?.onScreenUpdated()
-            }
-            override fun onTitleChanged(changedSession: TerminalSession) {}
-            override fun onSessionFinished(finishedSession: TerminalSession) {}
-            override fun onCopyTextToClipboard(session: TerminalSession, text: String?) {}
-            override fun onPasteTextFromClipboard(session: TerminalSession?) {}
-            override fun onBell(session: TerminalSession) {}
-            override fun onColorsChanged(session: TerminalSession) {}
-            override fun onTerminalCursorStateChange(state: Boolean) {}
-            override fun getTerminalCursorStyle(): Int? = null
-            override fun logError(tag: String?, message: String?) { Log.e(logTag, "$message") }
-            override fun logWarn(tag: String?, message: String?) { Log.w(logTag, "$message") }
-            override fun logInfo(tag: String?, message: String?) { Log.i(logTag, "$message") }
-            override fun logDebug(tag: String?, message: String?) { Log.d(logTag, "$message") }
-            override fun logVerbose(tag: String?, message: String?) { Log.v(logTag, "$message") }
-            override fun logStackTraceWithMessage(tag: String?, message: String?, e: Exception?) {
-                Log.e(logTag, "$message", e)
-            }
-            override fun logStackTrace(tag: String?, e: Exception?) { Log.e(logTag, "", e) }
-        }
-        if (useBootstrap) {
-            TerminalSession(
-                TermuxBootstrap.linkerPath(),
-                TermuxBootstrap.home(context).absolutePath,
-                TermuxBootstrap.launchArgs(context),
-                TermuxBootstrap.buildEnv(context),
-                2000,
-                sessionClient,
-            )
-        } else {
-            val home = context.filesDir.absolutePath
-            TerminalSession(
-                "/system/bin/sh",
-                home,
-                arrayOf("/system/bin/sh"),
-                arrayOf(
-                    "HOME=$home",
-                    "TMPDIR=${context.cacheDir.absolutePath}",
-                    "PATH=/system/bin:/system/xbin",
-                    "TERM=xterm-256color",
-                    "LANG=en_US.UTF-8",
-                ),
-                2000,
-                sessionClient,
-            )
-        }
-    }
+    // Process-scoped session: survives leaving/re-entering the screen so the
+    // back button no longer kills the shell.
+    val session = remember { TerminalHost.getOrCreate(context, useBootstrap) }
 
+    // Detach the view (not the session) when leaving; the shell keeps running.
     DisposableEffect(Unit) {
-        onDispose {
-            session.finishIfRunning()
-            viewHolder.view = null
-        }
+        onDispose { TerminalHost.view = null }
     }
 
     Scaffold(
@@ -285,11 +238,15 @@ private fun TerminalContent(onBack: () -> Unit, useBootstrap: Boolean) {
                     IconButton(onClick = { requestStorageAccess(context) }) {
                         Icon(Icons.Filled.Folder, contentDescription = "Grant storage access")
                     }
-                    IconButton(onClick = { viewHolder.view?.let { showKeyboard(it) } }) {
+                    IconButton(onClick = { TerminalHost.view?.let { showKeyboard(it) } }) {
                         Icon(Icons.Filled.KeyboardArrowDown, contentDescription = "Keyboard")
                     }
                     IconButton(onClick = { session.write("\u0003") }) {
                         Icon(Icons.Filled.Close, contentDescription = "Send Ctrl+C")
+                    }
+                    // End the shell and leave — the only thing that kills it now.
+                    IconButton(onClick = { TerminalHost.kill(); onBack() }) {
+                        Icon(Icons.Filled.PowerSettingsNew, contentDescription = "End session")
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(
@@ -303,9 +260,9 @@ private fun TerminalContent(onBack: () -> Unit, useBootstrap: Boolean) {
                 modifier = Modifier.fillMaxWidth().weight(1f),
                 factory = { ctx ->
                     TerminalView(ctx, null).apply {
-                        viewHolder.view = this
-                        setTerminalViewClient(HermesTerminalViewClient(this, mods, logTag, fontSize = 38))
-                        setTextSize(38)
+                        TerminalHost.view = this
+                        setTerminalViewClient(HermesTerminalViewClient(this, mods, logTag))
+                        setTextSize(TerminalHost.fontSize)
                         keepScreenOn = true
                         isFocusable = true
                         isFocusableInTouchMode = true
@@ -320,7 +277,7 @@ private fun TerminalContent(onBack: () -> Unit, useBootstrap: Boolean) {
             )
             ExtraKeysRow(
                 mods = mods,
-                onKey = { keyCode -> viewHolder.view?.let { dispatchKey(it, keyCode); mods.consume() } },
+                onKey = { keyCode -> TerminalHost.view?.let { dispatchKey(it, keyCode); mods.consume() } },
                 onText = { s -> session.write(s); mods.consume() },
             )
         }
@@ -436,15 +393,21 @@ private class HermesTerminalViewClient(
     private val view: TerminalView,
     private val mods: TermModifiers,
     private val logTag: String,
-    fontSize: Int,
 ) : TerminalViewClient {
-    private var fontSize: Int = fontSize
+    // TerminalView accumulates: mScaleFactor *= scale; mScaleFactor = onScale(mScaleFactor).
+    // So `scale` is the running pinch factor relative to gesture start, and the
+    // return value is written straight back into that accumulator. Returning the
+    // font size (as the old code did) poisons it and the zoom instantly maxes out.
+    // Apply one discrete font step per threshold crossing and return 1f to reset.
     override fun onScale(scale: Float): Float {
         if (scale < 0.9f || scale > 1.1f) {
-            fontSize = (fontSize * scale).toInt().coerceIn(12, 96)
-            view.setTextSize(fontSize)
+            val step = if (scale > 1f) 2 else -2
+            val newSize = (TerminalHost.fontSize + step).coerceIn(12, 96)
+            TerminalHost.fontSize = newSize
+            view.setTextSize(newSize)
+            return 1.0f // applied a step — reset the accumulator
         }
-        return fontSize.toFloat()
+        return scale // below threshold — let it keep accumulating
     }
     override fun onSingleTapUp(e: MotionEvent?) { showKeyboard(view) }
     override fun shouldBackButtonBeMappedToEscape(): Boolean = false
