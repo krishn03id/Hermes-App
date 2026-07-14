@@ -1,7 +1,12 @@
 package id.krishn03.hermes.ui
 
 import android.content.Context
+import android.content.Intent
+import android.net.Uri
+import android.os.Build
+import android.os.Environment
 import android.os.SystemClock
+import android.provider.Settings
 import android.util.Log
 import android.view.KeyEvent
 import android.view.MotionEvent
@@ -27,6 +32,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
@@ -276,6 +282,9 @@ private fun TerminalContent(onBack: () -> Unit, useBootstrap: Boolean) {
                     }
                 },
                 actions = {
+                    IconButton(onClick = { requestStorageAccess(context) }) {
+                        Icon(Icons.Filled.Folder, contentDescription = "Grant storage access")
+                    }
                     IconButton(onClick = { viewHolder.view?.let { showKeyboard(it) } }) {
                         Icon(Icons.Filled.KeyboardArrowDown, contentDescription = "Keyboard")
                     }
@@ -330,6 +339,34 @@ private fun showKeyboard(view: View) {
     view.requestFocus()
     val imm = view.context.getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager
     imm.showSoftInput(view, InputMethodManager.SHOW_IMPLICIT)
+}
+
+/**
+ * Opens the system screen to grant Hermes shared-storage access. On API 30+
+ * that's the special "All files access" page (MANAGE_EXTERNAL_STORAGE never
+ * appears on the normal Permissions list); older devices get app details.
+ */
+private fun requestStorageAccess(context: Context) {
+    val intent = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+        if (Environment.isExternalStorageManager()) {
+            // Already granted — send the user to the toggle anyway so they see it.
+            Intent(Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION)
+        } else {
+            Intent(
+                Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION,
+                Uri.parse("package:${context.packageName}"),
+            )
+        }
+    } else {
+        Intent(
+            Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+            Uri.parse("package:${context.packageName}"),
+        )
+    }
+    runCatching {
+        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        context.startActivity(intent)
+    }
 }
 
 private fun dispatchKey(view: TerminalView, keyCode: Int) {

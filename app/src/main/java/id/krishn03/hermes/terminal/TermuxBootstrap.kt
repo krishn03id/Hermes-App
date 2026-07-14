@@ -161,13 +161,28 @@ object TermuxBootstrap {
         conf.parentFile?.mkdirs()
         conf.writeText(
             """
-            Dir "$prefix/../";
+            Dir "$prefix";
             Dir::State "$prefix/var/lib/apt";
             Dir::State::status "$prefix/var/lib/dpkg/status";
+            Dir::State::lists "$prefix/var/lib/apt/lists";
             Dir::Cache "$prefix/var/cache/apt";
+            Dir::Cache::archives "$prefix/var/cache/apt/archives";
             Dir::Etc "$prefix/etc/apt";
+            Dir::Etc::sourcelist "$prefix/etc/apt/sources.list";
+            Dir::Etc::sourceparts "$prefix/etc/apt/sources.list.d";
+            Dir::Etc::trusted "$prefix/etc/apt/trusted.gpg";
+            Dir::Etc::trustedparts "$prefix/etc/apt/trusted.gpg.d";
             Dir::Log "$prefix/var/log/apt";
+            Dir::Bin::methods "$prefix/lib/apt/methods";
+            Dir::Bin::solvers "$prefix/lib/apt/solvers";
+            Dir::Bin::planners "$prefix/lib/apt/planners";
             Dir::Bin::dpkg "$prefix/bin/dpkg";
+            Dir::Bin::apt-key "$prefix/bin/apt-key";
+            Dir::Bin::gzip "$prefix/bin/gzip";
+            Dir::Bin::bzip2 "$prefix/bin/bzip2";
+            Dir::Bin::xz "$prefix/bin/xz";
+            Dir::Bin::lz4 "$prefix/bin/lz4";
+            Dir::Bin::zstd "$prefix/bin/zstd";
             APT::Architecture "${dpkgArch()}";
             """.trimIndent() + "\n",
         )
@@ -180,10 +195,13 @@ object TermuxBootstrap {
         else -> "i686"
     }
 
-    /** Rewrites bundled helper scripts — call on launch so existing installs
-     *  pick up updated scripts without a full reinstall. */
+    /** Rewrites bundled config + helper scripts — call on launch so existing
+     *  installs pick up the fixed apt.conf / scripts without a full reinstall. */
     fun refreshScripts(ctx: Context) {
-        if (isInstalled(ctx)) runCatching { writeStorageScript(ctx) }
+        if (isInstalled(ctx)) runCatching {
+            writeReloc(ctx)
+            writeStorageScript(ctx)
+        }
     }
 
     /** `hermes-setup-storage`: request storage access, then symlink ~/storage. */
@@ -199,16 +217,13 @@ object TermuxBootstrap {
             # Create ~/storage with links to shared + app-scoped storage.
             set -e
 
-            # Ask Android for "All files access" if we can't read shared storage yet.
-            # This opens the system permission screen; grant Hermes, then re-run.
-            if [ ! -r /sdcard ]; then
-                echo "Requesting storage permission…"
+            if [ ! -r /sdcard ] || ! ls /sdcard >/dev/null 2>&1; then
+                echo "No shared-storage access yet."
+                echo "Tap the folder icon in the terminal's top bar to grant Hermes"
+                echo "'All files access', then run hermes-setup-storage again."
+                # Best-effort: also try to open the settings screen directly.
                 am start -a android.settings.MANAGE_APP_ALL_FILES_ACCESS_PERMISSION \
-                    -d "package:$pkg" >/dev/null 2>&1 \
-                  || am start -a android.settings.MANAGE_ALL_FILES_ACCESS_PERMISSION >/dev/null 2>&1 \
-                  || am start -a android.settings.APPLICATION_DETAILS_SETTINGS \
                     -d "package:$pkg" >/dev/null 2>&1 || true
-                echo "Grant Hermes 'All files access', then run hermes-setup-storage again."
             fi
 
             mkdir -p "${'$'}HOME/storage"
