@@ -180,10 +180,17 @@ object TermuxBootstrap {
         else -> "i686"
     }
 
-    /** `hermes-setup-storage`: symlink ~/storage to shared/app storage dirs. */
+    /** Rewrites bundled helper scripts — call on launch so existing installs
+     *  pick up updated scripts without a full reinstall. */
+    fun refreshScripts(ctx: Context) {
+        if (isInstalled(ctx)) runCatching { writeStorageScript(ctx) }
+    }
+
+    /** `hermes-setup-storage`: request storage access, then symlink ~/storage. */
     private fun writeStorageScript(ctx: Context) {
         val prefix = prefix(ctx).absolutePath
         val ext = ctx.getExternalFilesDir(null)?.absolutePath ?: "/sdcard"
+        val pkg = ctx.packageName
         val script = File(prefix, "bin/hermes-setup-storage")
         script.parentFile?.mkdirs()
         script.writeText(
@@ -191,6 +198,19 @@ object TermuxBootstrap {
             #!$prefix/bin/bash
             # Create ~/storage with links to shared + app-scoped storage.
             set -e
+
+            # Ask Android for "All files access" if we can't read shared storage yet.
+            # This opens the system permission screen; grant Hermes, then re-run.
+            if [ ! -r /sdcard ]; then
+                echo "Requesting storage permission…"
+                am start -a android.settings.MANAGE_APP_ALL_FILES_ACCESS_PERMISSION \
+                    -d "package:$pkg" >/dev/null 2>&1 \
+                  || am start -a android.settings.MANAGE_ALL_FILES_ACCESS_PERMISSION >/dev/null 2>&1 \
+                  || am start -a android.settings.APPLICATION_DETAILS_SETTINGS \
+                    -d "package:$pkg" >/dev/null 2>&1 || true
+                echo "Grant Hermes 'All files access', then run hermes-setup-storage again."
+            fi
+
             mkdir -p "${'$'}HOME/storage"
             ln -sfn /sdcard "${'$'}HOME/storage/shared" 2>/dev/null || true
             ln -sfn /sdcard/Download "${'$'}HOME/storage/downloads" 2>/dev/null || true
@@ -200,7 +220,6 @@ object TermuxBootstrap {
             ln -sfn /sdcard/Movies "${'$'}HOME/storage/movies" 2>/dev/null || true
             ln -sfn "$ext" "${'$'}HOME/storage/external" 2>/dev/null || true
             echo "Storage set up at ~/storage"
-            echo "Note: shared storage needs the app's Files permission (grant in Settings)."
             """.trimIndent() + "\n",
         )
         script.setExecutable(true, false)

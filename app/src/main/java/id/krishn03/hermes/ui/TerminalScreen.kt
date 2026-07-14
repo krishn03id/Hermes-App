@@ -19,6 +19,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
@@ -201,6 +202,11 @@ private fun TerminalContent(onBack: () -> Unit, useBootstrap: Boolean) {
     val mods = remember { TermModifiers() }
     val viewHolder = remember { object { var view: TerminalView? = null } }
 
+    // Ensure existing bootstrap installs get updated helper scripts.
+    if (useBootstrap) {
+        LaunchedEffect(Unit) { TermuxBootstrap.refreshScripts(context) }
+    }
+
     val session = remember {
         val sessionClient = object : TerminalSessionClient {
             override fun onTextChanged(changedSession: TerminalSession) {
@@ -283,7 +289,7 @@ private fun TerminalContent(onBack: () -> Unit, useBootstrap: Boolean) {
             )
         },
     ) { padding ->
-        Column(Modifier.fillMaxSize().padding(padding)) {
+        Column(Modifier.fillMaxSize().padding(padding).imePadding()) {
             AndroidView(
                 modifier = Modifier.fillMaxWidth().weight(1f),
                 factory = { ctx ->
