@@ -5,6 +5,7 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import id.krishn03.hermes.data.ApiKeyEntry
 import id.krishn03.hermes.data.ChatMessage
+import id.krishn03.hermes.data.ChatSession
 import id.krishn03.hermes.data.Provider
 import id.krishn03.hermes.data.Role
 import id.krishn03.hermes.data.SettingsStore
@@ -31,6 +32,10 @@ data class ChatUiState(
     /** Image staged by the [+] button, sent with the next message. */
     val pendingImageBase64: String? = null,
     val pendingImageMime: String? = null,
+    /** Saved conversations for the sidebar, newest first. */
+    val sessions: List<ChatSession> = emptyList(),
+    /** The session currently open; null means an unsaved fresh chat. */
+    val activeSessionId: String? = null,
 ) {
     val activeKey: ApiKeyEntry?
         get() = keys.firstOrNull { it.id == activeKeyId } ?: keys.firstOrNull()
@@ -56,13 +61,43 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                     _ui.value = _ui.value.copy(keys = keys, activeKeyId = active)
                 }
         }
-        // Restore the last chat session once, on startup.
+        // Keep the sidebar's session list live.
         viewModelScope.launch {
-            val saved = store.chat.first()
-            if (saved.isNotEmpty() && _ui.value.messages.isEmpty()) {
-                _ui.value = _ui.value.copy(messages = saved)
+            store.sessions.collect { sessions ->
+                _ui.value = _ui.value.copy(sessions = sessions)
             }
         }
+        // On startup, restore the last-open session — migrating the legacy
+        // single-chat blob into a session the first time if needed.
+        viewModelScope.launch {
+            migrateLegacyChatIfNeeded()
+            val sessions = store.sessions.first()
+            val activeId = store.activeSessionId.first()
+            val open = sessions.firstOrNull { it.id == activeId } ?: sessions.firstOrNull()
+            if (open != null && _ui.value.messages.isEmpty()) {
+                _ui.value = _ui.value.copy(
+                    messages = open.messages,
+                    activeSessionId = open.id,
+                )
+                store.setActiveSession(open.id)
+            }
+        }
+    }
+
+    /** One-time: fold the old `chat_history` entry into a first session. */
+    private suspend fun migrateLegacyChatIfNeeded() {
+        if (store.sessions.first().isNotEmpty()) return
+        val legacy = store.chat.first()
+        if (legacy.isEmpty()) return
+        val session = ChatSession(
+            id = newSessionId(),
+            title = titleFrom(legacy),
+            messages = legacy,
+            updatedAt = System.currentTimeMillis(),
+        )
+        store.saveSession(session)
+        store.setActiveSession(session.id)
+        store.saveChat(emptyList()) // clear the legacy slot
     }
 
     fun updateActiveKey(id: String) = viewModelScope.launch { store.setActive(id) }
@@ -96,8 +131,30 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         _ui.value = _ui.value.copy(
             messages = emptyList(), isStreaming = false, error = null,
             pendingImageBase64 = null, pendingImageMime = null,
+            activeSessionId = null,
         )
-        viewModelScope.launch { store.saveChat(emptyList()) }
+        viewModelScope.launch { store.setActiveSession(null) }
+    }
+
+    /** Opens a saved session from the sidebar. */
+    fun selectSession(id: String) {
+        streamJob?.cancel()
+        val session = _ui.value.sessions.firstOrNull { it.id == id } ?: return
+        _ui.value = _ui.value.copy(
+            messages = session.messages,
+            activeSessionId = session.id,
+            isStreaming = false, error = null,
+            pendingImageBase64 = null, pendingImageMime = null,
+        )
+        viewModelScope.launch { store.setActiveSession(session.id) }
+    }
+
+    fun deleteSession(id: String) = viewModelScope.launch {
+        store.deleteSession(id)
+        // If the open chat was the one deleted, fall back to a fresh chat.
+        if (_ui.value.activeSessionId == id) {
+            _ui.value = _ui.value.copy(messages = emptyList(), activeSessionId = null)
+        }
     }
 
     fun stopStreaming() {
@@ -161,9 +218,39 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                 _ui.value = _ui.value.copy(isStreaming = false)
                 // NonCancellable: on Stop/newChat this coroutine is cancelled, and
                 // a plain suspend save here would itself throw and drop the write.
-                withContext(NonCancellable) { store.saveChat(_ui.value.messages) }
+                withContext(NonCancellable) { persistCurrentSession() }
             }
         }
+    }
+
+    /** Writes the open conversation to its session, creating one on first send. */
+    private suspend fun persistCurrentSession() {
+        val msgs = _ui.value.messages
+        if (msgs.isEmpty()) return
+        val id = _ui.value.activeSessionId ?: newSessionId().also {
+            _ui.value = _ui.value.copy(activeSessionId = it)
+        }
+        val existing = _ui.value.sessions.firstOrNull { it.id == id }
+        store.saveSession(
+            ChatSession(
+                id = id,
+                // Keep the first title once set; otherwise derive from the chat.
+                title = existing?.title?.takeIf { it.isNotBlank() } ?: titleFrom(msgs),
+                messages = msgs,
+                updatedAt = System.currentTimeMillis(),
+            ),
+        )
+        store.setActiveSession(id)
+    }
+
+    private fun newSessionId(): String =
+        "chat_" + System.currentTimeMillis().toString(36) + "_" + _ui.value.sessions.size
+
+    /** A short title from the first user message, for the sidebar. */
+    private fun titleFrom(messages: List<ChatMessage>): String {
+        val first = messages.firstOrNull { it.role == Role.USER }?.content?.trim().orEmpty()
+        val title = first.replace(Regex("\\s+"), " ").take(40)
+        return title.ifBlank { "New chat" }
     }
 
     fun dismissError() {

@@ -4,21 +4,22 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.Chat
 import androidx.compose.material.icons.filled.Add
-import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Extension
 import androidx.compose.material.icons.filled.Hub
 import androidx.compose.material.icons.filled.Memory
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalDrawerSheet
 import androidx.compose.material3.NavigationDrawerItem
@@ -30,15 +31,15 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import id.krishn03.hermes.data.ApiKeyEntry
+import id.krishn03.hermes.data.ChatSession
 
 @Composable
 fun SidebarContent(
-    activeModelLabel: String?,
-    keys: List<ApiKeyEntry>,
-    activeKeyId: String?,
+    sessions: List<ChatSession>,
+    activeSessionId: String?,
     onNewChat: () -> Unit,
-    onSelectKey: (String) -> Unit,
+    onSelectSession: (String) -> Unit,
+    onDeleteSession: (String) -> Unit,
     onOpenSettings: () -> Unit,
     onDemo: (String) -> Unit,
 ) {
@@ -72,47 +73,59 @@ fun SidebarContent(
 
             Spacer(Modifier.height(12.dp))
             Text(
-                text = "MODELS",
+                text = "CHATS",
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 fontWeight = FontWeight.SemiBold,
                 modifier = Modifier.padding(start = 16.dp, bottom = 4.dp),
             )
 
-            LazyColumn(Modifier.weight(1f)) {
-                if (keys.isEmpty()) {
+            LazyColumn(
+                Modifier.weight(1f),
+                verticalArrangement = Arrangement.spacedBy(2.dp),
+            ) {
+                if (sessions.isEmpty()) {
                     items(listOf(Unit)) {
                         Text(
-                            text = "No API keys yet.\nOpen Settings to add one.",
+                            text = "No chats yet.\nStart typing to begin one.",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             modifier = Modifier.padding(16.dp),
                         )
                     }
                 } else {
-                    items(keys) { key ->
-                        val selected = key.id == activeKeyId
+                    items(sessions, key = { it.id }) { session ->
+                        val selected = session.id == activeSessionId
                         NavigationDrawerItem(
                             icon = {
-                                if (selected) Icon(Icons.Filled.Check, contentDescription = null)
+                                Icon(
+                                    Icons.AutoMirrored.Filled.Chat,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(18.dp),
+                                )
                             },
                             label = {
-                                Column {
-                                    Text(
-                                        text = key.label.ifBlank { key.model },
-                                        maxLines = 1,
-                                        fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
-                                    )
-                                    Text(
-                                        text = "${key.provider.label} · ${key.model}",
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                        maxLines = 1,
+                                Text(
+                                    text = session.title.ifBlank { "New chat" },
+                                    maxLines = 1,
+                                    fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
+                                )
+                            },
+                            badge = {
+                                IconButton(
+                                    onClick = { onDeleteSession(session.id) },
+                                    modifier = Modifier.size(28.dp),
+                                ) {
+                                    Icon(
+                                        Icons.Filled.Close,
+                                        contentDescription = "Delete chat",
+                                        modifier = Modifier.size(16.dp),
+                                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
                                     )
                                 }
                             },
                             selected = selected,
-                            onClick = { onSelectKey(key.id) },
+                            onClick = { onSelectSession(session.id) },
                             shape = RoundedCornerShape(12.dp),
                         )
                     }

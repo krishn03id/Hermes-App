@@ -128,14 +128,17 @@ fun HermesApp(viewModel: ChatViewModel) {
         drawerState = drawerState,
         drawerContent = {
             SidebarContent(
-                activeModelLabel = state.activeKey?.let { "${it.provider.label} · ${it.model}" },
-                keys = state.keys,
-                activeKeyId = state.activeKeyId,
+                sessions = state.sessions,
+                activeSessionId = state.activeSessionId,
                 onNewChat = {
                     viewModel.newChat()
                     scope.launch { drawerState.close() }
                 },
-                onSelectKey = { viewModel.updateActiveKey(it) },
+                onSelectSession = {
+                    viewModel.selectSession(it)
+                    scope.launch { drawerState.close() }
+                },
+                onDeleteSession = { viewModel.deleteSession(it) },
                 onOpenSettings = {
                     scope.launch { drawerState.close() }
                     showSettings = true
@@ -186,6 +189,11 @@ fun HermesApp(viewModel: ChatViewModel) {
                             keys = state.keys,
                             activeProvider = state.activeKey?.provider,
                             onSelectProvider = viewModel::selectProvider,
+                            onNoKey = { provider ->
+                                scope.launch {
+                                    snackbarHost.showSnackbar("No ${provider.label} key — add one in Settings.")
+                                }
+                            },
                         )
                     },
                     colors = TopAppBarDefaults.topAppBarColors(
@@ -570,17 +578,21 @@ private fun ModelPill(
     }
 }
 
-/** Top-bar provider switcher. Lists providers that have at least one key. */
+/** Top-bar provider switcher. Lists every supported provider; the ones with
+ *  a configured key are selectable, the rest are shown greyed with a hint so
+ *  it's obvious what's set up (and what stray key might be lingering). */
 @Composable
 private fun ProviderMenu(
     keys: List<id.krishn03.hermes.data.ApiKeyEntry>,
     activeProvider: id.krishn03.hermes.data.Provider?,
     onSelectProvider: (id.krishn03.hermes.data.Provider) -> Unit,
+    onNoKey: (id.krishn03.hermes.data.Provider) -> Unit,
 ) {
     var expanded by remember { mutableStateOf(false) }
-    val available = remember(keys) { keys.map { it.provider }.distinct() }
+    // Key count per provider, so "which providers do I actually have?" is clear.
+    val counts = remember(keys) { keys.groupingBy { it.provider }.eachCount() }
     Box {
-        IconButton(onClick = { if (available.isNotEmpty()) expanded = true }) {
+        IconButton(onClick = { expanded = true }) {
             Icon(
                 Icons.Filled.SwapHoriz,
                 contentDescription = "Switch provider",
@@ -588,17 +600,33 @@ private fun ProviderMenu(
             )
         }
         DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
-            available.forEach { provider ->
+            id.krishn03.hermes.data.Provider.entries.forEach { provider ->
+                val count = counts[provider] ?: 0
+                val hasKey = count > 0
                 DropdownMenuItem(
                     leadingIcon = {
                         if (provider == activeProvider) {
                             Icon(Icons.Filled.Check, contentDescription = null)
                         }
                     },
-                    text = { Text(provider.label) },
+                    text = {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text(
+                                provider.label,
+                                color = if (hasKey) MaterialTheme.colorScheme.onSurface
+                                else MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                            Spacer(Modifier.width(8.dp))
+                            Text(
+                                text = if (hasKey) "$count key${if (count > 1) "s" else ""}" else "no key",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                    },
                     onClick = {
-                        onSelectProvider(provider)
                         expanded = false
+                        if (hasKey) onSelectProvider(provider) else onNoKey(provider)
                     },
                 )
             }

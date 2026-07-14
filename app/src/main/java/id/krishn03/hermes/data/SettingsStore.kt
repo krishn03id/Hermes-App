@@ -26,6 +26,8 @@ class SettingsStore(private val context: Context) {
     private val activeKey = stringPreferencesKey("active_key_id")
     private val usageKey = stringPreferencesKey("usage_stats")
     private val chatKey = stringPreferencesKey("chat_history")
+    private val sessionsKey = stringPreferencesKey("chat_sessions")
+    private val activeSessionKey = stringPreferencesKey("active_session_id")
 
     val keys: Flow<List<ApiKeyEntry>> = context.dataStore.data.map { prefs ->
         prefs[keysKey]?.let { raw ->
@@ -47,6 +49,47 @@ class SettingsStore(private val context: Context) {
         // small; reopened chats show text only, which is fine for history.
         val slim = list.map { it.copy(imageBase64 = null, imageMime = null) }
         context.dataStore.edit { it[chatKey] = json.encodeToString(slim) }
+    }
+
+    // ---- Chat sessions (sidebar history) ----
+
+    /** All saved sessions, newest first. */
+    val sessions: Flow<List<ChatSession>> = context.dataStore.data.map { prefs ->
+        readSessions(prefs).sortedByDescending { it.updatedAt }
+    }
+
+    val activeSessionId: Flow<String?> = context.dataStore.data.map { it[activeSessionKey] }
+
+    private fun readSessions(prefs: Preferences): List<ChatSession> =
+        prefs[sessionsKey]?.let { raw ->
+            runCatching { json.decodeFromString<List<ChatSession>>(raw) }.getOrDefault(emptyList())
+        } ?: emptyList()
+
+    /** Inserts or updates a session (dropping image blobs to keep prefs small). */
+    suspend fun saveSession(session: ChatSession) {
+        val slim = session.copy(
+            messages = session.messages.map { it.copy(imageBase64 = null, imageMime = null) },
+        )
+        context.dataStore.edit { prefs ->
+            val list = readSessions(prefs).toMutableList()
+            val idx = list.indexOfFirst { it.id == slim.id }
+            if (idx >= 0) list[idx] = slim else list.add(slim)
+            prefs[sessionsKey] = json.encodeToString(list)
+        }
+    }
+
+    suspend fun deleteSession(id: String) {
+        context.dataStore.edit { prefs ->
+            val list = readSessions(prefs).filterNot { it.id == id }
+            prefs[sessionsKey] = json.encodeToString(list)
+            if (prefs[activeSessionKey] == id) prefs.remove(activeSessionKey)
+        }
+    }
+
+    suspend fun setActiveSession(id: String?) {
+        context.dataStore.edit { prefs ->
+            if (id == null) prefs.remove(activeSessionKey) else prefs[activeSessionKey] = id
+        }
     }
 
     val usage: Flow<List<UsageStat>> = context.dataStore.data.map { prefs ->

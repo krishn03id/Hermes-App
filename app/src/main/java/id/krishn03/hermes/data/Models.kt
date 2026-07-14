@@ -56,6 +56,18 @@ data class ChatMessage(
 )
 
 /**
+ * A saved conversation, listed in the sidebar. [title] is derived from the
+ * first user message; [updatedAt] is an epoch-millis stamp used for ordering.
+ */
+@Serializable
+data class ChatSession(
+    val id: String,
+    val title: String,
+    val messages: List<ChatMessage> = emptyList(),
+    val updatedAt: Long = 0,
+)
+
+/**
  * Per-model usage counters, accumulated on device. We don't get exact token
  * counts from a streamed response without extra parsing, so we track something
  * honest and useful: number of messages sent and characters received.
