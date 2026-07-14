@@ -15,8 +15,10 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
@@ -25,6 +27,8 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material3.Button
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -32,10 +36,12 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -45,6 +51,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -52,21 +59,145 @@ import com.termux.terminal.TerminalSession
 import com.termux.terminal.TerminalSessionClient
 import com.termux.view.TerminalView
 import com.termux.view.TerminalViewClient
+import id.krishn03.hermes.terminal.TermuxBootstrap
+
+private enum class TermPhase { CHOOSE, INSTALLING, BOOTSTRAP, BASIC }
 
 /**
  * A real PTY terminal, embedded via Termux's terminal-view + terminal-emulator.
- * Runs a shell inside Hermes' app sandbox. Includes a soft-keyboard fix (the raw
- * TerminalView never opens the IME on its own) and a Termux-style extra-keys row.
+ * On first open it offers to install a Termux bootstrap (bash, apt, pkg, ~250
+ * tools) into the app sandbox; you can also skip to a basic system shell.
  */
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun TerminalScreen(onBack: () -> Unit) {
     val context = LocalContext.current
+    var phase by remember {
+        mutableStateOf(if (TermuxBootstrap.isInstalled(context)) TermPhase.BOOTSTRAP else TermPhase.CHOOSE)
+    }
+
+    when (phase) {
+        TermPhase.CHOOSE -> InstallGate(
+            onInstall = { phase = TermPhase.INSTALLING },
+            onSkip = { phase = TermPhase.BASIC },
+            onBack = onBack,
+        )
+        TermPhase.INSTALLING -> InstallProgress(
+            onDone = { phase = TermPhase.BOOTSTRAP },
+            onFailed = { phase = TermPhase.CHOOSE },
+            onBack = onBack,
+        )
+        TermPhase.BOOTSTRAP -> TerminalContent(onBack = onBack, useBootstrap = true)
+        TermPhase.BASIC -> TerminalContent(onBack = onBack, useBootstrap = false)
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun InstallGate(onInstall: () -> Unit, onSkip: () -> Unit, onBack: () -> Unit) {
+    TermScaffold("Terminal", onBack) { padding ->
+        Column(
+            Modifier.fillMaxSize().padding(padding).padding(28.dp),
+            verticalArrangement = Arrangement.Center,
+            horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
+            Text(
+                "Set up the terminal",
+                style = MaterialTheme.typography.headlineSmall,
+                fontFamily = FontFamily.Monospace,
+                fontWeight = FontWeight.SemiBold,
+            )
+            Spacer(Modifier.height(12.dp))
+            Text(
+                "Install a Linux environment (bash, apt, pkg, and ~250 tools) into " +
+                    "Hermes' private storage. This downloads ~30 MB once. No root needed.",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                textAlign = TextAlign.Center,
+            )
+            Spacer(Modifier.height(24.dp))
+            Button(onClick = onInstall) { Text("Install environment") }
+            Spacer(Modifier.height(8.dp))
+            TextButton(onClick = onSkip) { Text("Skip — use basic system shell") }
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun InstallProgress(onDone: () -> Unit, onFailed: () -> Unit, onBack: () -> Unit) {
+    val context = LocalContext.current
+    var status by remember { mutableStateOf("Starting…") }
+    var error by remember { mutableStateOf<String?>(null) }
+
+    LaunchedEffect(Unit) {
+        runCatching { TermuxBootstrap.install(context) { status = it } }
+            .onSuccess { onDone() }
+            .onFailure { error = it.message ?: "Install failed" }
+    }
+
+    TermScaffold("Installing", onBack) { padding ->
+        Column(
+            Modifier.fillMaxSize().padding(padding).padding(28.dp),
+            verticalArrangement = Arrangement.Center,
+            horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
+            if (error == null) {
+                CircularProgressIndicator()
+                Spacer(Modifier.height(20.dp))
+                Text(status, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            } else {
+                Text(
+                    "Install failed",
+                    style = MaterialTheme.typography.titleMedium,
+                    color = MaterialTheme.colorScheme.error,
+                )
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    error!!,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    textAlign = TextAlign.Center,
+                )
+                Spacer(Modifier.height(20.dp))
+                Button(onClick = onFailed) { Text("Back") }
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun TermScaffold(
+    title: String,
+    onBack: () -> Unit,
+    content: @Composable (androidx.compose.foundation.layout.PaddingValues) -> Unit,
+) {
+    Scaffold(
+        containerColor = MaterialTheme.colorScheme.background,
+        topBar = {
+            TopAppBar(
+                title = { Text(title, fontFamily = FontFamily.Monospace) },
+                navigationIcon = {
+                    IconButton(onClick = onBack) {
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
+                    }
+                },
+                colors = TopAppBarDefaults.topAppBarColors(
+                    containerColor = MaterialTheme.colorScheme.background,
+                ),
+            )
+        },
+        content = content,
+    )
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun TerminalContent(onBack: () -> Unit, useBootstrap: Boolean) {
+    val context = LocalContext.current
     val logTag = "HermesTerminal"
 
-    // Shared, one-shot Ctrl/Alt/Shift state: written by the extra-keys row, read
-    // by the view client so both soft-keyboard chars and dispatched special keys
-    // pick up the modifiers. Reset after each consumed key.
+    // Shared one-shot Ctrl/Alt/Shift state (extra-keys row <-> view client).
     val mods = remember { TermModifiers() }
     val viewHolder = remember { object { var view: TerminalView? = null } }
 
@@ -93,22 +224,32 @@ fun TerminalScreen(onBack: () -> Unit) {
             }
             override fun logStackTrace(tag: String?, e: Exception?) { Log.e(logTag, "", e) }
         }
-        val home = context.filesDir.absolutePath
-        val env = arrayOf(
-            "HOME=$home",
-            "TMPDIR=${context.cacheDir.absolutePath}",
-            "PATH=/system/bin:/system/xbin",
-            "TERM=xterm-256color",
-            "LANG=en_US.UTF-8",
-        )
-        TerminalSession(
-            /* shellPath      = */ "/system/bin/sh",
-            /* cwd            = */ home,
-            /* args           = */ arrayOf("/system/bin/sh"),
-            /* env            = */ env,
-            /* transcriptRows = */ 2000,
-            /* client         = */ sessionClient,
-        )
+        if (useBootstrap) {
+            TerminalSession(
+                TermuxBootstrap.linkerPath(),
+                TermuxBootstrap.home(context).absolutePath,
+                TermuxBootstrap.launchArgs(context),
+                TermuxBootstrap.buildEnv(context),
+                2000,
+                sessionClient,
+            )
+        } else {
+            val home = context.filesDir.absolutePath
+            TerminalSession(
+                "/system/bin/sh",
+                home,
+                arrayOf("/system/bin/sh"),
+                arrayOf(
+                    "HOME=$home",
+                    "TMPDIR=${context.cacheDir.absolutePath}",
+                    "PATH=/system/bin:/system/xbin",
+                    "TERM=xterm-256color",
+                    "LANG=en_US.UTF-8",
+                ),
+                2000,
+                sessionClient,
+            )
+        }
     }
 
     DisposableEffect(Unit) {
@@ -129,11 +270,9 @@ fun TerminalScreen(onBack: () -> Unit) {
                     }
                 },
                 actions = {
-                    // Re-open the soft keyboard.
                     IconButton(onClick = { viewHolder.view?.let { showKeyboard(it) } }) {
                         Icon(Icons.Filled.KeyboardArrowDown, contentDescription = "Keyboard")
                     }
-                    // Interrupt (Ctrl+C = ETX).
                     IconButton(onClick = { session.write("\u0003") }) {
                         Icon(Icons.Filled.Close, contentDescription = "Send Ctrl+C")
                     }
@@ -160,7 +299,6 @@ fun TerminalScreen(onBack: () -> Unit) {
                             ViewGroup.LayoutParams.MATCH_PARENT,
                         )
                         attachSession(session)
-                        // Show the keyboard once the view is laid out & focused.
                         post { showKeyboard(this) }
                     }
                 },
@@ -179,7 +317,6 @@ private class TermModifiers {
     var ctrl by mutableStateOf(false)
     var alt by mutableStateOf(false)
     var shift by mutableStateOf(false)
-    /** Clear one-shot modifiers once a key has consumed them. */
     fun consume() { ctrl = false; alt = false; shift = false }
 }
 
@@ -189,7 +326,6 @@ private fun showKeyboard(view: View) {
     imm.showSoftInput(view, InputMethodManager.SHOW_IMPLICIT)
 }
 
-/** Dispatch a down+up KeyEvent so TerminalView's KeyHandler builds the sequence. */
 private fun dispatchKey(view: TerminalView, keyCode: Int) {
     val t = SystemClock.uptimeMillis()
     view.dispatchKeyEvent(KeyEvent(t, t, KeyEvent.ACTION_DOWN, keyCode, 0))
@@ -198,16 +334,11 @@ private fun dispatchKey(view: TerminalView, keyCode: Int) {
 
 /** Termux-style extra-keys: ESC/CTRL/ALT/SHIFT/TAB, arrows, HOME/END/PGUP/PGDN, symbols. */
 @Composable
-private fun ExtraKeysRow(
-    mods: TermModifiers,
-    onKey: (Int) -> Unit,
-    onText: (String) -> Unit,
-) {
+private fun ExtraKeysRow(mods: TermModifiers, onKey: (Int) -> Unit, onText: (String) -> Unit) {
     Surface(color = MaterialTheme.colorScheme.surfaceContainer) {
         Column(Modifier.fillMaxWidth().padding(vertical = 6.dp)) {
             Row(
-                Modifier.fillMaxWidth().horizontalScroll(rememberScrollState())
-                    .padding(horizontal = 6.dp),
+                Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 6.dp),
                 horizontalArrangement = Arrangement.spacedBy(6.dp),
             ) {
                 KeyCap("ESC") { onKey(KeyEvent.KEYCODE_ESCAPE) }
@@ -221,8 +352,7 @@ private fun ExtraKeysRow(
                 KeyCap("~") { onText("~") }
             }
             Row(
-                Modifier.fillMaxWidth().horizontalScroll(rememberScrollState())
-                    .padding(horizontal = 6.dp, vertical = 6.dp),
+                Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 6.dp, vertical = 6.dp),
                 horizontalArrangement = Arrangement.spacedBy(6.dp),
             ) {
                 KeyCap("←") { onKey(KeyEvent.KEYCODE_DPAD_LEFT) }
@@ -287,7 +417,6 @@ private class HermesTerminalViewClient(
     override fun readShiftKey(): Boolean = mods.shift
     override fun readFnKey(): Boolean = false
     override fun onCodePoint(codePoint: Int, ctrlDown: Boolean, session: TerminalSession?): Boolean {
-        // Modifiers were already captured by inputCodePoint before this call.
         mods.consume()
         return false
     }
