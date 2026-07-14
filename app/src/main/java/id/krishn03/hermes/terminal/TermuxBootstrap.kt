@@ -144,6 +144,11 @@ object TermuxBootstrap {
             "TERMUX_EXEC__SYSTEM_LINKER_EXEC__MODE=enable",
             "APT_CONFIG=$prefix/etc/apt/apt.conf",
             "DPKG_ADMINDIR=$prefix/var/lib/dpkg",
+            // TLS: point curl/openssl/wget/python at the bundled CA bundle,
+            // else they use the baked com.termux path and reject every cert.
+            "SSL_CERT_FILE=$prefix/etc/tls/cert.pem",
+            "SSL_CERT_DIR=$prefix/etc/tls/certs",
+            "OPENSSL_CONF=$prefix/etc/tls/openssl.cnf",
         )
     }
 
@@ -183,6 +188,7 @@ object TermuxBootstrap {
             Dir::Bin::xz "$prefix/bin/xz";
             Dir::Bin::lz4 "$prefix/bin/lz4";
             Dir::Bin::zstd "$prefix/bin/zstd";
+            Acquire::https::CaInfo "$prefix/etc/tls/cert.pem";
             APT::Architecture "${dpkgArch()}";
             """.trimIndent() + "\n",
         )
