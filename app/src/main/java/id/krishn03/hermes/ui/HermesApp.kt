@@ -87,6 +87,12 @@ fun HermesApp(viewModel: ChatViewModel) {
     val state by viewModel.ui.collectAsStateWithLifecycle()
     var showSettings by remember { mutableStateOf(false) }
     var showUsage by remember { mutableStateOf(false) }
+    var showTerminal by remember { mutableStateOf(false) }
+
+    if (showTerminal) {
+        TerminalScreen(onBack = { showTerminal = false })
+        return
+    }
 
     if (showUsage) {
         val usage by viewModel.usage.collectAsStateWithLifecycle()
@@ -174,10 +180,8 @@ fun HermesApp(viewModel: ChatViewModel) {
                         }
                     },
                     actions = {
-                        // Terminal — demo only.
-                        IconButton(onClick = {
-                            scope.launch { snackbarHost.showSnackbar("Terminal — coming soon") }
-                        }) {
+                        // Terminal — opens a real PTY shell (Termux engine).
+                        IconButton(onClick = { showTerminal = true }) {
                             Icon(
                                 Icons.Filled.Terminal,
                                 contentDescription = "Terminal",

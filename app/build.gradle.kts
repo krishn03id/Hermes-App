@@ -81,5 +81,10 @@ dependencies {
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.7.3")
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
 
+    // Termux's terminal engine — a real PTY terminal view. terminal-view pulls
+    // terminal-emulator (with the prebuilt native libtermux.so) transitively.
+    implementation("com.github.termux.termux-app:terminal-view:v0.118.0")
+    implementation("com.github.termux.termux-app:terminal-emulator:v0.118.0")
+
     debugImplementation("androidx.compose.ui:ui-tooling")
 }
