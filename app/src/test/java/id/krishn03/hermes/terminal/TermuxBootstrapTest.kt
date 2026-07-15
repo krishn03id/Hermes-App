@@ -70,6 +70,20 @@ class TermuxBootstrapTest {
         val script = TermuxBootstrap.aptKeyWrapperScript(hermesPrefix)
 
         assertTrue(script.startsWith("#!$hermesPrefix/bin/bash\n"))
+        assertTrue(script.contains("\"$hermesPrefix/bin/bash\" \"$hermesPrefix/bin/hermes-refresh-bootstrap-links\""))
         assertTrue(script.contains("exec \"$hermesPrefix/bin/bash\" \"$hermesPrefix/bin/apt-key\" \"${'$'}@\""))
+    }
+
+    @Test
+    fun `dpkg wrapper relocates package paths and bypasses Android path checks`() {
+        val installRoot = "/data/user/0/id.krishn03.hermes/files/dpkg-root"
+        val script = TermuxBootstrap.dpkgWrapperScript(hermesPrefix, installRoot)
+
+        assertTrue(script.contains("--force-bad-path --force-script-chrootless"))
+        assertTrue(script.contains("--instdir=\"$installRoot\""))
+        assertTrue(script.contains("s|${'$'}old_prefix|${'$'}prefix|g"))
+        assertTrue(script.contains("!= \"$hermesPrefix/bin/hermes-dpkg\""))
+        assertTrue(script.contains("\"${'$'}old_prefix\"|\"${'$'}old_prefix\"/*)"))
+        assertTrue(script.contains("hermes-refresh-bootstrap-links\" || true"))
     }
 }

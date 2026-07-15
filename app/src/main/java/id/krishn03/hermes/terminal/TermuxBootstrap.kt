@@ -30,6 +30,7 @@ object TermuxBootstrap {
     private const val PACMAN_KEYRING = "termux-pacman.gpg"
     private const val REPAIR_SCRIPT = "hermes-refresh-bootstrap-links"
     private const val APT_KEY_WRAPPER = "hermes-apt-key"
+    private const val DPKG_WRAPPER = "hermes-dpkg"
     internal val bootstrapBinAliases: Map<String, String> = linkedMapOf(
         "bzcmp" to "bzdiff",
         "bzless" to "bzmore",
@@ -122,9 +123,12 @@ object TermuxBootstrap {
         }
         home(ctx).mkdirs()
         File(prefix, "tmp").mkdirs()
+        ensureAptDirectories(ctx)
+        ensureDpkgRoot(ctx)
         repairBootstrapLinks(ctx)
         writeBootstrapRepairScript(ctx)
         writeAptKeyWrapper(ctx)
+        writeDpkgWrapper(ctx)
         writeReloc(ctx)
         writeStorageScript(ctx)
         onStatus("Ready")
@@ -166,6 +170,8 @@ object TermuxBootstrap {
             "TMPDIR=$prefix/tmp",
             "TERM=xterm-256color",
             "LANG=en_US.UTF-8",
+            "TERMINFO=$prefix/share/terminfo",
+            "TERMINFO_DIRS=$prefix/share/terminfo",
             "TERMUX__PREFIX=$prefix",
             "TERMUX__ROOTFS=$rootfs",
             "TERMUX_APP__DATA_DIR=$dataDir",
@@ -210,7 +216,7 @@ object TermuxBootstrap {
             Dir::Bin::methods "$prefix/lib/apt/methods";
             Dir::Bin::solvers "$prefix/lib/apt/solvers";
             Dir::Bin::planners "$prefix/lib/apt/planners";
-            Dir::Bin::dpkg "$prefix/bin/dpkg";
+            Dir::Bin::dpkg "$prefix/bin/$DPKG_WRAPPER";
             Dir::Bin::apt-key "$prefix/bin/$APT_KEY_WRAPPER";
             Dir::Bin::gzip "$prefix/bin/gzip";
             Dir::Bin::bzip2 "$prefix/bin/bzip2";
@@ -219,8 +225,6 @@ object TermuxBootstrap {
             Dir::Bin::zstd "$prefix/bin/zstd";
             Acquire::https::CaInfo "$prefix/etc/tls/cert.pem";
             APT::Architecture "${dpkgArch()}";
-            APT::Update::Pre-Invoke::Hermes "$prefix/bin/bash $prefix/bin/$REPAIR_SCRIPT";
-            DPkg::Post-Invoke::Hermes "$prefix/bin/bash $prefix/bin/$REPAIR_SCRIPT";
             """.trimIndent() + "\n",
         )
     }
@@ -230,6 +234,33 @@ object TermuxBootstrap {
         "arm" -> "arm"
         "x86_64" -> "x86_64"
         else -> "i686"
+    }
+
+    private fun ensureAptDirectories(ctx: Context) {
+        listOf(
+            "var/lib/apt/lists/partial",
+            "var/cache/apt/archives/partial",
+            "var/log/apt",
+        ).forEach { relativePath ->
+            val directory = File(prefix(ctx), relativePath)
+            check(directory.isDirectory || directory.mkdirs()) {
+                "Could not create APT directory: $relativePath"
+            }
+        }
+    }
+
+    /** Dpkg archives contain the full com.termux prefix. Install through a
+     *  private root whose package prefix resolves to Hermes' real prefix. */
+    private fun ensureDpkgRoot(ctx: Context) {
+        val installRoot = File(rootfs(ctx), "dpkg-root")
+        val realPrefix = prefix(ctx).absolutePath
+        listOf(TERMUX_PREFIX, realPrefix).forEach { guestPath ->
+            val alias = File(installRoot, guestPath.removePrefix("/"))
+            check(alias.parentFile?.isDirectory == true || alias.parentFile?.mkdirs() == true) {
+                "Could not create relocated dpkg root"
+            }
+            replaceSymlink(alias, realPrefix)
+        }
     }
 
     /**
@@ -324,16 +355,82 @@ object TermuxBootstrap {
     internal fun aptKeyWrapperScript(prefix: String): String =
         """
         #!$prefix/bin/bash
+        set -e
+        "$prefix/bin/bash" "$prefix/bin/$REPAIR_SCRIPT"
         exec "$prefix/bin/bash" "$prefix/bin/apt-key" "${'$'}@"
+        """.trimIndent() + "\n"
+
+    /** Adds Android-safe dpkg flags and relocates newly unpacked package paths
+     *  between APT's unpack and configure phases. */
+    private fun writeDpkgWrapper(ctx: Context) {
+        val prefix = prefix(ctx).absolutePath
+        val wrapper = File(prefix, "bin/$DPKG_WRAPPER")
+        wrapper.writeText(dpkgWrapperScript(prefix, File(rootfs(ctx), "dpkg-root").absolutePath))
+        wrapper.setExecutable(true, false)
+    }
+
+    internal fun dpkgWrapperScript(prefix: String, installRoot: String): String =
+        """
+        #!$prefix/bin/bash
+        prefix="$prefix"
+        old_prefix="$TERMUX_PREFIX"
+        admindir="$prefix/var/lib/dpkg"
+        preload="$prefix/lib/libtermux-exec-ld-preload.so"
+
+        relocate_package_paths() {
+            for script in \
+                "${'$'}admindir/info/"*.preinst "${'$'}admindir/info/"*.postinst \
+                "${'$'}admindir/info/"*.prerm "${'$'}admindir/info/"*.postrm \
+                "${'$'}admindir/info/"*.config; do
+                [ -f "${'$'}script" ] || continue
+                "$prefix/bin/sed" -i "s|${'$'}old_prefix|${'$'}prefix|g" "${'$'}script"
+                "$prefix/bin/sed" -i \
+                    "s|LD_PRELOAD=''|LD_PRELOAD='${'$'}preload'|g" "${'$'}script"
+            done
+
+            while IFS= read -r file; do
+                [ "${'$'}file" != "$prefix/bin/$DPKG_WRAPPER" ] || continue
+                "$prefix/bin/sed" -i "s|${'$'}old_prefix|${'$'}prefix|g" "${'$'}file"
+            done < <(
+                for directory in \
+                    "$prefix/bin" "$prefix/etc" "$prefix/include" \
+                    "$prefix/libexec" "$prefix/lib" "$prefix/opt" \
+                    "$prefix/share"; do
+                    [ ! -d "${'$'}directory" ] || \
+                        "$prefix/bin/grep" -Ilr "${'$'}old_prefix" "${'$'}directory" 2>/dev/null || true
+                done
+            )
+
+            while IFS= read -r -d '' link; do
+                target=$("$prefix/bin/readlink" "${'$'}link") || continue
+                case "${'$'}target" in
+                    "${'$'}old_prefix"|"${'$'}old_prefix"/*)
+                        relocated="${'$'}prefix${'$'}{target#"${'$'}old_prefix"}"
+                        "$prefix/bin/ln" -sfn -- "${'$'}relocated" "${'$'}link"
+                        ;;
+                esac
+            done < <("$prefix/bin/find" "$prefix" -type l -print0)
+        }
+
+        relocate_package_paths
+        "$prefix/bin/dpkg" --force-bad-path --force-script-chrootless \
+            --admindir="${'$'}admindir" --instdir="$installRoot" "${'$'}@"
+        status=${'$'}?
+        relocate_package_paths
+        "$prefix/bin/bash" "$prefix/bin/$REPAIR_SCRIPT" || true
+        exit ${'$'}status
         """.trimIndent() + "\n"
 
     /** Rewrites bundled config + helper scripts — call on launch so existing
      *  installs pick up the fixed apt.conf / scripts without a full reinstall. */
     fun refreshScripts(ctx: Context) {
         if (isInstalled(ctx)) runCatching {
+            ensureAptDirectories(ctx)
+            ensureDpkgRoot(ctx)
             repairBootstrapLinks(ctx)
             writeBootstrapRepairScript(ctx)
             writeAptKeyWrapper(ctx)
+            writeDpkgWrapper(ctx)
             writeReloc(ctx)
             writeStorageScript(ctx)
         }.onFailure {
