@@ -86,5 +86,6 @@ dependencies {
     implementation("com.github.termux.termux-app:terminal-view:v0.118.0")
     implementation("com.github.termux.termux-app:terminal-emulator:v0.118.0")
 
+    testImplementation("junit:junit:4.13.2")
     debugImplementation("androidx.compose.ui:ui-tooling")
 }

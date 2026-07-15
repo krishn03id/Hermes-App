@@ -26,6 +26,15 @@ import java.util.zip.ZipInputStream
 object TermuxBootstrap {
 
     private const val TAG = "TermuxBootstrap"
+    private const val TERMUX_PREFIX = "/data/data/com.termux/files/usr"
+    private const val PACMAN_KEYRING = "termux-pacman.gpg"
+    private const val REPAIR_SCRIPT = "hermes-refresh-bootstrap-links"
+    internal val bootstrapBinAliases: Map<String, String> = linkedMapOf(
+        "bzcmp" to "bzdiff",
+        "bzless" to "bzmore",
+        "zipinfo" to "unzip",
+    )
+
     // Pinned bootstrap release ('+' must be %2B in the URL).
     private const val RELEASE =
         "https://github.com/termux/termux-packages/releases/download/bootstrap-2026.07.12-r1%2Bapt.android-7"
@@ -95,11 +104,14 @@ object TermuxBootstrap {
         onStatus("Linking…")
         symlinks.forEach { (target, linkRel) ->
             val link = File(staging, linkRel)
+            val relocatedTarget = relocateSymlinkTarget(target, prefix.absolutePath)
             link.parentFile?.mkdirs()
             runCatching {
-                if (link.exists()) link.delete()
-                Os.symlink(target, link.absolutePath)
-            }.onFailure { Log.w(TAG, "symlink $linkRel -> $target failed: ${it.message}") }
+                link.delete()
+                Os.symlink(relocatedTarget, link.absolutePath)
+            }.onFailure {
+                Log.w(TAG, "symlink $linkRel -> $relocatedTarget failed: ${it.message}")
+            }
         }
 
         onStatus("Finalising…")
@@ -109,10 +121,24 @@ object TermuxBootstrap {
         }
         home(ctx).mkdirs()
         File(prefix, "tmp").mkdirs()
+        repairBootstrapLinks(ctx)
+        writeBootstrapRepairScript(ctx)
         writeReloc(ctx)
         writeStorageScript(ctx)
         onStatus("Ready")
     }
+
+    /** Termux archives contain absolute links into com.termux's app data. */
+    internal fun relocateSymlinkTarget(target: String, installedPrefix: String): String =
+        when {
+            target == TERMUX_PREFIX -> installedPrefix
+            target.startsWith("$TERMUX_PREFIX/") ->
+                installedPrefix + target.removePrefix(TERMUX_PREFIX)
+            else -> target
+        }
+
+    internal fun isAptKeyring(name: String): Boolean =
+        name.endsWith(".gpg") && name != PACMAN_KEYRING
 
     private fun downloadTo(url: String, dest: File) {
         val client = OkHttpClient()
@@ -190,6 +216,8 @@ object TermuxBootstrap {
             Dir::Bin::zstd "$prefix/bin/zstd";
             Acquire::https::CaInfo "$prefix/etc/tls/cert.pem";
             APT::Architecture "${dpkgArch()}";
+            APT::Update::Pre-Invoke::Hermes "$prefix/bin/bash $prefix/bin/$REPAIR_SCRIPT";
+            DPkg::Post-Invoke::Hermes "$prefix/bin/bash $prefix/bin/$REPAIR_SCRIPT";
             """.trimIndent() + "\n",
         )
     }
@@ -201,12 +229,96 @@ object TermuxBootstrap {
         else -> "i686"
     }
 
+    /**
+     * Repair package-owned links without touching third-party APT keys. Atomic
+     * replacement also handles dangling links, for which File.exists() is false.
+     */
+    private fun repairBootstrapLinks(ctx: Context) {
+        val prefix = prefix(ctx)
+        val keyringDir = File(prefix, "share/termux-keyring")
+        val aptDir = File(prefix, "etc/apt/trusted.gpg.d")
+        val pacmanDir = File(prefix, "share/pacman/keyrings")
+        val keyrings = keyringDir.listFiles { file ->
+            file.isFile && file.extension == "gpg"
+        }?.sortedBy { it.name }
+            ?: error("Termux keyring directory is missing")
+        check(keyrings.isNotEmpty()) { "Termux keyring is empty" }
+        check(aptDir.isDirectory || aptDir.mkdirs()) { "Could not create APT trust directory" }
+        check(pacmanDir.isDirectory || pacmanDir.mkdirs()) {
+            "Could not create Pacman keyring directory"
+        }
+
+        keyrings.forEach { source ->
+            if (isAptKeyring(source.name)) {
+                replaceSymlink(
+                    File(aptDir, source.name),
+                    "../../../share/termux-keyring/${source.name}",
+                )
+            }
+            replaceSymlink(
+                File(pacmanDir, source.name),
+                "../../termux-keyring/${source.name}",
+            )
+        }
+
+        bootstrapBinAliases.forEach { (linkName, targetName) ->
+            if (File(prefix, "bin/$targetName").exists()) {
+                replaceSymlink(File(prefix, "bin/$linkName"), targetName)
+            }
+        }
+    }
+
+    private fun replaceSymlink(link: File, target: String) {
+        val temp = File(link.parentFile, ".${link.name}.hermes-new")
+        temp.delete()
+        try {
+            Os.symlink(target, temp.absolutePath)
+            Os.rename(temp.absolutePath, link.absolutePath)
+        } finally {
+            temp.delete()
+        }
+    }
+
+    /** Re-run relocation around package operations that may overwrite links. */
+    private fun writeBootstrapRepairScript(ctx: Context) {
+        val prefix = prefix(ctx).absolutePath
+        val script = File(prefix, "bin/$REPAIR_SCRIPT")
+        val aliasRepairs = bootstrapBinAliases.entries.joinToString("\n") { (link, target) ->
+            "[ ! -e \"$prefix/bin/$target\" ] || ln -sfn $target \"$prefix/bin/$link\""
+        }
+        script.writeText(
+            """
+            #!$prefix/bin/bash
+            set -e
+
+            keyring_dir="$prefix/share/termux-keyring"
+            apt_dir="$prefix/etc/apt/trusted.gpg.d"
+            pacman_dir="$prefix/share/pacman/keyrings"
+            mkdir -p "${'$'}apt_dir" "${'$'}pacman_dir"
+
+            for source in "${'$'}keyring_dir"/*.gpg; do
+                [ -f "${'$'}source" ] || continue
+                name=${'$'}{source##*/}
+                if [ "${'$'}name" != "$PACMAN_KEYRING" ]; then
+                    ln -sfn "../../../share/termux-keyring/${'$'}name" "${'$'}apt_dir/${'$'}name"
+                fi
+                ln -sfn "../../termux-keyring/${'$'}name" "${'$'}pacman_dir/${'$'}name"
+            done
+            """.trimIndent() + "\n\n" + aliasRepairs + "\n",
+        )
+        script.setExecutable(true, false)
+    }
+
     /** Rewrites bundled config + helper scripts — call on launch so existing
      *  installs pick up the fixed apt.conf / scripts without a full reinstall. */
     fun refreshScripts(ctx: Context) {
         if (isInstalled(ctx)) runCatching {
+            repairBootstrapLinks(ctx)
+            writeBootstrapRepairScript(ctx)
             writeReloc(ctx)
             writeStorageScript(ctx)
+        }.onFailure {
+            Log.e(TAG, "Could not refresh bootstrap configuration", it)
         }
     }
 
