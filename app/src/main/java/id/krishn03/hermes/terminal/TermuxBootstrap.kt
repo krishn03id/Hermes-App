@@ -29,6 +29,7 @@ object TermuxBootstrap {
     private const val TERMUX_PREFIX = "/data/data/com.termux/files/usr"
     private const val PACMAN_KEYRING = "termux-pacman.gpg"
     private const val REPAIR_SCRIPT = "hermes-refresh-bootstrap-links"
+    private const val APT_KEY_WRAPPER = "hermes-apt-key"
     internal val bootstrapBinAliases: Map<String, String> = linkedMapOf(
         "bzcmp" to "bzdiff",
         "bzless" to "bzmore",
@@ -123,6 +124,7 @@ object TermuxBootstrap {
         File(prefix, "tmp").mkdirs()
         repairBootstrapLinks(ctx)
         writeBootstrapRepairScript(ctx)
+        writeAptKeyWrapper(ctx)
         writeReloc(ctx)
         writeStorageScript(ctx)
         onStatus("Ready")
@@ -167,6 +169,7 @@ object TermuxBootstrap {
             "TERMUX__PREFIX=$prefix",
             "TERMUX__ROOTFS=$rootfs",
             "TERMUX_APP__DATA_DIR=$dataDir",
+            "TERMUX_APP__LEGACY_DATA_DIR=/data/data/${ctx.packageName}",
             "TERMUX_EXEC__SYSTEM_LINKER_EXEC__MODE=enable",
             "APT_CONFIG=$prefix/etc/apt/apt.conf",
             "DPKG_ADMINDIR=$prefix/var/lib/dpkg",
@@ -208,7 +211,7 @@ object TermuxBootstrap {
             Dir::Bin::solvers "$prefix/lib/apt/solvers";
             Dir::Bin::planners "$prefix/lib/apt/planners";
             Dir::Bin::dpkg "$prefix/bin/dpkg";
-            Dir::Bin::apt-key "$prefix/bin/apt-key";
+            Dir::Bin::apt-key "$prefix/bin/$APT_KEY_WRAPPER";
             Dir::Bin::gzip "$prefix/bin/gzip";
             Dir::Bin::bzip2 "$prefix/bin/bzip2";
             Dir::Bin::xz "$prefix/bin/xz";
@@ -309,12 +312,28 @@ object TermuxBootstrap {
         script.setExecutable(true, false)
     }
 
+    /** APT execs apt-key directly, bypassing the shell that relocates its
+     *  hardcoded com.termux shebang. This stable wrapper supplies that shell. */
+    private fun writeAptKeyWrapper(ctx: Context) {
+        val prefix = prefix(ctx).absolutePath
+        val wrapper = File(prefix, "bin/$APT_KEY_WRAPPER")
+        wrapper.writeText(aptKeyWrapperScript(prefix))
+        wrapper.setExecutable(true, false)
+    }
+
+    internal fun aptKeyWrapperScript(prefix: String): String =
+        """
+        #!$prefix/bin/bash
+        exec "$prefix/bin/bash" "$prefix/bin/apt-key" "${'$'}@"
+        """.trimIndent() + "\n"
+
     /** Rewrites bundled config + helper scripts — call on launch so existing
      *  installs pick up the fixed apt.conf / scripts without a full reinstall. */
     fun refreshScripts(ctx: Context) {
         if (isInstalled(ctx)) runCatching {
             repairBootstrapLinks(ctx)
             writeBootstrapRepairScript(ctx)
+            writeAptKeyWrapper(ctx)
             writeReloc(ctx)
             writeStorageScript(ctx)
         }.onFailure {

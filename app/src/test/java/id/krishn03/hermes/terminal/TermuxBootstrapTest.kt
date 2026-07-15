@@ -64,4 +64,12 @@ class TermuxBootstrapTest {
             TermuxBootstrap.bootstrapBinAliases,
         )
     }
+
+    @Test
+    fun `apt key wrapper bypasses the package's hardcoded Termux shebang`() {
+        val script = TermuxBootstrap.aptKeyWrapperScript(hermesPrefix)
+
+        assertTrue(script.startsWith("#!$hermesPrefix/bin/bash\n"))
+        assertTrue(script.contains("exec \"$hermesPrefix/bin/bash\" \"$hermesPrefix/bin/apt-key\" \"${'$'}@\""))
+    }
 }
